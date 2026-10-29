@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>tinukMurai! • 3D Tournament Roster & Battle Royale</title>
+    <meta name="description" content="Pick your favorite wrestlers, root for your champion, and watch autonomous 3D tinukMurai! sumos push each other off the crumbling, shrinking Dohyo!" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800;900&family=Yuji+Boku&display=swap" rel="stylesheet">
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  </head>
+  <body>
+    <!-- 3D Canvas Container -->
+    <div id="game-canvas-container"></div>
+
+    <!-- LANDING SCREEN OVERLAY -->
+    <section id="landing-screen" aria-label="Tournament Wrestler Selection">
+      <div class="landing-content">
+        <!-- Hero Header -->
+        <header class="landing-header">
+          <div class="landing-kanji-pill">大相撲 • TINUKMURAI! GRAND BRAWL</div>
+          <h1 class="landing-title">tinukMurai!</h1>
+          <p class="landing-subtitle">
+            Draft your stable from the wrestlers below (select 2 to 10 combatants). Pick your champion to root for, and enter the shrinking Dohyo!
+          </p>
+        </header>
+
+        <!-- Selection Controls Bar -->
+        <div class="selection-control-bar">
+          <div class="filter-btn-group">
+            <button id="btn-quick-10" class="filter-btn active">⚡ Select 10</button>
+            <button id="btn-quick-random6" class="filter-btn">🎲 Random 6</button>
+            <button id="btn-quick-random10" class="filter-btn">🎲 Random 10</button>
+            <button id="btn-quick-clear" class="filter-btn dim">Clear All</button>
+          </div>
+
+          <div class="selected-status">
+            <span id="selected-count-badge" class="count-badge">10 / 10 WRESTLERS</span>
+          </div>
+        </div>
+
+        <!-- Wrestler Roster Grid -->
+        <div id="landing-roster-grid" class="landing-grid"></div>
+
+        <!-- Champion Banner & Launch CTA -->
+        <div class="landing-footer-dock">
+          <div id="champion-picked-banner" class="champion-banner">
+            <span class="champ-label">YOUR CHAMPION:</span>
+            <span class="champ-name">Ross</span>
+          </div>
+
+          <button id="btn-start-brawl" class="start-brawl-btn primary-glow">
+            <span class="btn-icon">⚡</span> ENTER THE DOHYO • START BRAWL
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- IN-GAME UI OVERLAY LAYER -->
+    <div id="ui-overlay" class="game-hud">
+      <!-- Top Header & Live Ring Gauge -->
+      <header id="top-bar">
+        <div class="header-branding">
+          <div class="kanji-badge">大相撲</div>
+          <div class="title-group">
+            <h2 id="game-title">tinukMurai!</h2>
+            <span class="subtitle">AUTONOMOUS 3D BATTLE ROYALE</span>
+          </div>
+        </div>
+
+        <div id="ring-tier-gauge">
+          <div class="ring-pulse-icon"></div>
+          <div id="ring-tier-text">
+            <span class="tier-label">RING DIAMETER:</span>
+            <span class="tier-value">32.0m</span>
+            <span class="tier-survivors">10 SUMOS LEFT</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- Horizontal Live Sumo Roster Bar -->
+      <section id="roster-bar" aria-label="Active Sumo Fighters">
+        <div id="roster-container"></div>
+      </section>
+
+      <!-- Center Dramatic Announcement Box -->
+      <div id="announcement-box" class="announcement-box">
+        <div id="announcement-title">HAKKEYOI...</div>
+        <div id="announcement-sub">NOKOTTA!</div>
+      </div>
+
+      <!-- Bottom Spectator Control Dock -->
+      <footer id="spectator-dock" aria-label="Spectator Match Controls">
+        <div class="dock-section">
+          <button id="btn-open-landing" class="dock-btn roster-setup-btn">
+            🏠 Roster Setup
+          </button>
+          <button id="btn-new-match" class="action-btn primary-glow">
+            ⚡ Rematch
+          </button>
+        </div>
+
+        <div class="dock-section">
+          <span class="dock-label">SPEED:</span>
+          <div class="btn-group" role="group" aria-label="Simulation Speed">
+            <button class="dock-btn speed-btn" data-speed="0.5">0.5x</button>
+            <button class="dock-btn speed-btn active" data-speed="1.0">1.0x</button>
+            <button class="dock-btn speed-btn" data-speed="1.5">1.5x</button>
+            <button class="dock-btn speed-btn" data-speed="2.0">2.0x</button>
+          </div>
+        </div>
+
+        <div class="dock-section">
+          <span class="dock-label">CAMERA:</span>
+          <div class="btn-group" role="group" aria-label="Camera Modes">
+            <button class="dock-btn cam-btn active" data-cam="action">🎥 Action</button>
+            <button class="dock-btn cam-btn" data-cam="orbit">🔄 Orbit</button>
+            <button class="dock-btn cam-btn" data-cam="topdown">📐 Arena</button>
+          </div>
+        </div>
+
+        <div class="dock-section">
+          <button id="btn-mute" class="dock-btn icon-btn">🔊 Sound: ON</button>
+        </div>
+      </footer>
+
+      <!-- Victory Celebration Modal -->
+      <div id="victory-modal" class="modal-backdrop">
+        <div class="modal-card">
+          <div class="trophy-glow">🏆</div>
+          <div class="kanji-banner">横綱誕生 • YOKOZUNA CROWNED</div>
+          <div id="winner-badge" class="winner-avatar-ring"></div>
+          <h2 id="winner-name">Ross</h2>
+          <div id="winner-title">The Iron Wall • Super Heavy Tank</div>
+          
+          <div class="stats-row">
+            <div class="stat-box">
+              <span class="stat-number" id="winner-kills">4 KOs</span>
+              <span class="stat-desc">Knockouts</span>
+            </div>
+            <div class="stat-box">
+              <span class="stat-number" id="match-time">28.5s</span>
+              <span class="stat-desc">Match Time</span>
+            </div>
+          </div>
+
+          <div class="modal-actions-row">
+            <button id="btn-modal-roster" class="dock-btn large-modal-btn">
+              🏠 Change Wrestlers
+            </button>
+            <button id="btn-rematch-modal" class="action-btn primary-glow large">
+              START REMATCH
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
