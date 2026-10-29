@@ -26,62 +26,131 @@ class GameApp {
     this.initGameSystems();
     this.setupEventListeners();
 
-    // Start with Landing Page visible over scenic 3D arena
+    // Start with Landing Page visible over scenic 3D blue-sky Sakura arena with showcase wrestlers
+    this.spawnShowcaseSumos();
     this.spectatorCam.setMode('orbit');
     this.landing.show();
+    window.__sumoApp = this;
 
-    this.clock = new THREE.Clock();
+    this.timer = new THREE.Timer();
     this.animate = this.animate.bind(this);
     requestAnimationFrame(this.animate);
   }
 
   initThree() {
-    // 1. Scene with atmospheric fog
+    // 1. Vibrant Blue-Sky Scene & Soft Horizon Aerial Fog
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x0e111a);
-    this.scene.fog = new THREE.FogExp2(0x0e111a, 0.016);
+    this.scene.background = new THREE.Color(0x5ec8ff);
+    this.scene.fog = new THREE.FogExp2(0xd4f1ff, 0.0036);
 
-    // 2. Camera
+    // 2. Camera (extended far plane so sky dome, islets & clouds never clip)
     this.camera = new THREE.PerspectiveCamera(
       45,
       window.innerWidth / window.innerHeight,
       0.1,
-      200
+      500
     );
     this.camera.position.set(0, 18, 24);
 
-    // 3. WebGL Renderer with soft shadows
+    // 3. WebGL Renderer with sRGB output & soft shadows
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.15;
+    this.renderer.toneMappingExposure = 1.08;
     this.container.appendChild(this.renderer.domElement);
 
-    // 4. Lighting Design
-    const hemiLight = new THREE.HemisphereLight(0xffecd2, 0x1a1a2e, 0.7);
+    // 4. Procedural Vivid Blue Sky Dome & Sun Disc
+    this.createSkyDome();
+
+    // 5. Crisp Sunlit Daylight Rig (Sky Hemisphere + Warm Sun + Azure Rim)
+    const hemiLight = new THREE.HemisphereLight(0x9be4ff, 0xf3c68f, 1.05);
     this.scene.add(hemiLight);
 
-    const dirLight = new THREE.DirectionalLight(0xfff5ea, 1.4);
-    dirLight.position.set(16, 28, 16);
+    const dirLight = new THREE.DirectionalLight(0xfff8e8, 1.75);
+    dirLight.position.set(20, 32, 18);
     dirLight.castShadow = true;
     dirLight.shadow.mapSize.width = 2048;
     dirLight.shadow.mapSize.height = 2048;
     dirLight.shadow.camera.near = 0.5;
-    dirLight.shadow.camera.far = 70;
-    const d = 18;
+    dirLight.shadow.camera.far = 90;
+    const d = 22;
     dirLight.shadow.camera.left = -d;
     dirLight.shadow.camera.right = d;
     dirLight.shadow.camera.top = d;
     dirLight.shadow.camera.bottom = -d;
-    dirLight.shadow.bias = -0.0005;
+    dirLight.shadow.bias = -0.0004;
+    dirLight.shadow.normalBias = 0.02;
     this.scene.add(dirLight);
 
-    const rimLight = new THREE.DirectionalLight(0x7209b7, 0.85);
-    rimLight.position.set(-16, 12, -16);
+    const rimLight = new THREE.DirectionalLight(0x66d9ff, 0.65);
+    rimLight.position.set(-18, 14, -16);
     this.scene.add(rimLight);
+  }
+
+  createSkyDome() {
+    const skyGeo = new THREE.SphereGeometry(240, 32, 24);
+    const sunDir = new THREE.Vector3(20, 26, -30).normalize();
+
+    const skyMat = new THREE.ShaderMaterial({
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false,
+      uniforms: {
+        uZenithColor: { value: new THREE.Color(0x1464d8) },
+        uMidSkyColor: { value: new THREE.Color(0x4cc3ff) },
+        uHorizonColor: { value: new THREE.Color(0xe2f6ff) },
+        uNadirColor: { value: new THREE.Color(0xb6e3ff) },
+        uSunColor: { value: new THREE.Color(0xfff6d6) },
+        uSunDir: { value: sunDir }
+      },
+      vertexShader: `
+        varying vec3 vWorldPos;
+        void main() {
+          vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+          vWorldPos = worldPosition.xyz;
+          gl_Position = projectionMatrix * viewMatrix * worldPosition;
+        }
+      `,
+      fragmentShader: `
+        uniform vec3 uZenithColor;
+        uniform vec3 uMidSkyColor;
+        uniform vec3 uHorizonColor;
+        uniform vec3 uNadirColor;
+        uniform vec3 uSunColor;
+        uniform vec3 uSunDir;
+        varying vec3 vWorldPos;
+
+        void main() {
+          vec3 dir = normalize(vWorldPos);
+          float h = dir.y;
+
+          // Smooth multi-stop blue sky gradient
+          vec3 col;
+          if (h >= 0.0) {
+            float t1 = smoothstep(0.0, 0.34, h);
+            float t2 = smoothstep(0.28, 0.92, h);
+            col = mix(uHorizonColor, uMidSkyColor, t1);
+            col = mix(col, uZenithColor, t2);
+          } else {
+            col = mix(uHorizonColor, uNadirColor, smoothstep(0.0, -0.35, h));
+          }
+
+          // Warm solar halo & crisp sun disc
+          float sunAmt = max(dot(dir, uSunDir), 0.0);
+          col += uSunColor * pow(sunAmt, 10.0) * 0.24;
+          col = mix(col, uSunColor, smoothstep(0.9965, 0.9988, sunAmt));
+
+          gl_FragColor = vec4(col, 1.0);
+        }
+      `
+    });
+
+    const skyDome = new THREE.Mesh(skyGeo, skyMat);
+    this.scene.add(skyDome);
   }
 
   initGameSystems() {
@@ -100,6 +169,7 @@ class GameApp {
       onRestart: () => this.startNewMatch(),
       onOpenLanding: () => {
         this.matchActive = false;
+        this.spawnShowcaseSumos();
         this.landing.show();
         this.spectatorCam.setMode('orbit');
       },
@@ -137,16 +207,49 @@ class GameApp {
     window.addEventListener('keydown', unlockAudio);
   }
 
+  clearSumos() {
+    this.sumos.forEach(s => {
+      this.scene.remove(s.root);
+    });
+    this.sumos = [];
+  }
+
+  // Spawn idle breathing wrestlers on the Dohyo while browsing the Landing Screen
+  spawnShowcaseSumos() {
+    this.clearSumos();
+    this.particles.clear();
+    this.dohyo.reset();
+
+    const previewList = SUMO_ROSTER.slice(0, 6);
+    const radius = 5.2;
+    previewList.forEach((config, idx) => {
+      const angle = (idx / previewList.length) * Math.PI * 2;
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius;
+      const facingAngle = Math.atan2(-x, -z);
+
+      const sumo = new ChibiSumo(
+        this.scene,
+        {
+          ...config,
+          x,
+          z,
+          angle: facingAngle,
+          isChampion: config.id === this.championId
+        },
+        this.particles
+      );
+      this.sumos.push(sumo);
+    });
+  }
+
   startNewMatch() {
     // 1. Hide victory modal & landing screen
     this.ui.hideVictory();
     this.landing.hide();
 
     // 2. Clean up existing sumos
-    this.sumos.forEach(s => {
-      this.scene.remove(s.root);
-    });
-    this.sumos = [];
+    this.clearSumos();
     this.particles.clear();
     this.dohyo.reset();
 
@@ -168,7 +271,8 @@ class GameApp {
           ...config,
           x,
           z,
-          angle: facingAngle
+          angle: facingAngle,
+          isChampion: config.id === this.championId
         },
         this.particles
       );
@@ -268,37 +372,36 @@ class GameApp {
     }
   }
 
-  animate() {
+  animate(timestamp) {
     requestAnimationFrame(this.animate);
 
-    const rawDt = Math.min(this.clock.getDelta(), 0.1);
+    this.timer.update(timestamp);
+    const rawDt = Math.min(this.timer.getDelta(), 0.1);
     const dt = rawDt * this.simSpeed;
-    const elapsedTime = this.clock.getElapsedTime();
+    const elapsedTime = this.timer.getElapsed();
 
-    // 1. Update AI decisions
+    // 1. Update AI decisions & Physics only during an active match
     if (this.matchActive) {
       this.ai.update(this.sumos, dt);
+      this.physics.update(this.sumos, dt);
     }
 
-    // 2. Update Sumo Physics & Collisions
-    this.physics.update(this.sumos, dt);
-
-    // 3. Update Chibi Sumo Animations & Meshes
+    // 2. Update Chibi Sumo Animations & Meshes (including idle showcase breathing)
     this.sumos.forEach(s => s.update(dt, elapsedTime));
 
-    // 4. Update Ring & Shrink Animations
+    // 3. Update Ring, Sakura Petals, Clouds & Banners
     this.dohyo.update(dt, elapsedTime);
 
-    // 5. Update Particle Systems
+    // 4. Update Particle Systems
     this.particles.update(dt);
 
-    // 6. Update Dynamic Spectator Camera (gentle orbit if on landing page)
+    // 5. Update Dynamic Spectator Camera (gentle orbit if on landing page)
     if (!this.matchActive && this.landing && !this.landing.landingScreen.classList.contains('hidden')) {
-      this.spectatorCam.orbitAngles.theta += 0.2 * rawDt;
+      this.spectatorCam.orbitAngles.theta += 0.18 * rawDt;
     }
     this.spectatorCam.update(this.sumos, this.dohyo, dt);
 
-    // 7. Render 3D Scene
+    // 6. Render 3D Scene
     this.renderer.render(this.scene, this.camera);
   }
 }

@@ -3,12 +3,12 @@
    ======================================================== */
 
 :root {
-  --bg-primary: #0a0a0f;
-  --bg-glass: rgba(18, 18, 28, 0.72);
-  --bg-glass-card: rgba(28, 28, 44, 0.65);
-  --bg-glass-hover: rgba(45, 45, 70, 0.85);
-  --border-glass: rgba(255, 255, 255, 0.12);
-  --border-glass-bright: rgba(255, 255, 255, 0.28);
+  --bg-primary: #3b9eff;
+  --bg-glass: rgba(14, 22, 38, 0.78);
+  --bg-glass-card: rgba(18, 28, 48, 0.74);
+  --bg-glass-hover: rgba(30, 44, 72, 0.88);
+  --border-glass: rgba(255, 255, 255, 0.18);
+  --border-glass-bright: rgba(255, 255, 255, 0.36);
 
   --accent-gold: #ffd166;
   --accent-crimson: #ff0054;
@@ -59,12 +59,13 @@ html, body {
   width: 100%;
   height: 100%;
   z-index: 50;
-  background: radial-gradient(circle at 50% 20%, rgba(20, 20, 36, 0.94), rgba(8, 8, 14, 0.98));
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
+  background: radial-gradient(circle at 50% 20%, rgba(12, 24, 46, 0.62), rgba(8, 16, 32, 0.80));
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   overflow-y: auto;
   display: flex;
   justify-content: center;
+  align-items: flex-start;
   padding: 30px 20px 110px 20px;
   transition: opacity 0.35s ease, transform 0.35s ease;
 }
@@ -115,7 +116,8 @@ html, body {
 
 .landing-subtitle {
   font-size: 14px;
-  color: var(--text-muted);
+  color: #dce4ee;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
   max-width: 640px;
   line-height: 1.4;
 }
@@ -512,7 +514,8 @@ html, body {
   -webkit-backdrop-filter: blur(16px);
   padding: 8px 18px;
   border-radius: 16px;
-  border: 1px solid rgba(255, 77, 77, 0.35);
+  border: 1px solid rgba(255, 77, 77, 0.45);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
 }
 
 .ring-pulse-icon {
@@ -605,6 +608,7 @@ html, body {
   padding: 6px 10px;
   border-radius: 10px;
   border: 1px solid var(--border-glass);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
   cursor: pointer;
   transition: all 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
   width: 100%;

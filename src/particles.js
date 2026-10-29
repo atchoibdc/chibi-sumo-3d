@@ -8,63 +8,81 @@ export class ParticleSystem {
     this.shockwaves = [];
 
     // Shared geometries and materials for performance
-    this.puffGeo = new THREE.SphereGeometry(0.18, 5, 5);
+    this.puffGeo = new THREE.SphereGeometry(0.19, 7, 6);
     this.puffMat = new THREE.MeshBasicMaterial({
-      color: 0xeadfcf,
+      color: 0xfff8eb,
       transparent: true,
-      opacity: 0.65
+      opacity: 0.72
     });
 
-    this.sparkGeo = new THREE.BoxGeometry(0.12, 0.12, 0.12);
+    this.sparkGeo = new THREE.BoxGeometry(0.13, 0.13, 0.13);
     this.sparkMat = new THREE.MeshBasicMaterial({
       color: 0xffd23f,
       transparent: true,
-      opacity: 0.9
+      opacity: 0.92
     });
 
-    this.starGeo = new THREE.OctahedronGeometry(0.2, 0);
+    this.starGeo = new THREE.OctahedronGeometry(0.22, 0);
 
-    this.rockGeo = new THREE.DodecahedronGeometry(0.35, 0);
+    this.rockGeo = new THREE.DodecahedronGeometry(0.36, 0);
     this.rockMat = new THREE.MeshStandardMaterial({
-      color: 0x8b5a2b,
-      roughness: 0.9,
+      color: 0xb57c4e,
+      roughness: 0.85,
+      flatShading: true
+    });
+    this.turfMat = new THREE.MeshStandardMaterial({
+      color: 0x3ec34d,
+      roughness: 0.80,
       flatShading: true
     });
 
-    this.shockwaveGeo = new THREE.RingGeometry(0.2, 0.5, 32);
+    this.shockwaveGeo = new THREE.RingGeometry(0.24, 0.54, 32);
     this.shockwaveGeo.rotateX(-Math.PI / 2);
   }
 
-  // Little dust puff when waddling/running
+  // Sunlit salt/sand puff when waddling or dashing
   emitDustPuff(pos) {
     const mesh = new THREE.Mesh(this.puffGeo, this.puffMat.clone());
-    mesh.position.set(pos.x + (Math.random() - 0.5) * 0.2, pos.y + 0.1, pos.z + (Math.random() - 0.5) * 0.2);
-    const scale = 0.5 + Math.random() * 0.5;
+    mesh.position.set(
+      pos.x + (Math.random() - 0.5) * 0.25,
+      pos.y + 0.12,
+      pos.z + (Math.random() - 0.5) * 0.25
+    );
+    const scale = 0.55 + Math.random() * 0.5;
     mesh.scale.set(scale, scale, scale);
     this.scene.add(mesh);
 
     this.particles.push({
       mesh,
-      vel: new THREE.Vector3((Math.random() - 0.5) * 0.6, 0.8 + Math.random() * 0.6, (Math.random() - 0.5) * 0.6),
+      vel: new THREE.Vector3(
+        (Math.random() - 0.5) * 0.65,
+        0.85 + Math.random() * 0.6,
+        (Math.random() - 0.5) * 0.65
+      ),
       rot: new THREE.Vector3(Math.random() * 2, Math.random() * 2, Math.random() * 2),
-      growth: 1.8,
+      growth: 1.85,
       fadeRate: 1.8,
       life: 1.0
     });
   }
 
-  // Steam / energy sparks when a chibi is charging up a super push
+  // Energy sparks when a chibi is charging up a super push
   emitChargeSpark(pos, color = 0xffd23f) {
     const mat = this.sparkMat.clone();
     mat.color.setHex(color);
     const mesh = new THREE.Mesh(this.sparkGeo, mat);
     const angle = Math.random() * Math.PI * 2;
-    const dist = 0.6 + Math.random() * 0.5;
-    mesh.position.set(pos.x + Math.cos(angle) * dist, pos.y + 0.1 + Math.random() * 0.3, pos.z + Math.sin(angle) * dist);
+    const dist = 0.65 + Math.random() * 0.5;
+    mesh.position.set(
+      pos.x + Math.cos(angle) * dist,
+      pos.y + 0.1 + Math.random() * 0.35,
+      pos.z + Math.sin(angle) * dist
+    );
     this.scene.add(mesh);
 
-    // Sparks swirl inward and upward toward the chibi center
-    const toCenter = new THREE.Vector3(pos.x - mesh.position.x, 1.2, pos.z - mesh.position.z).normalize().multiplyScalar(2.2);
+    const toCenter = new THREE.Vector3(pos.x - mesh.position.x, 1.25, pos.z - mesh.position.z)
+      .normalize()
+      .multiplyScalar(2.3);
 
     this.particles.push({
       mesh,
@@ -76,44 +94,46 @@ export class ParticleSystem {
     });
   }
 
-  // Comic hit stars and expanding shockwave ring on heavy collision
+  // Vibrant arcade hit stars & dual shockwave on sumo collision
   emitClashFX(pos, force = 1.0) {
-    // 1. Expanding Ground Shockwave Ring
+    // 1. Expanding Golden-Amber Ground Shockwave Ring
     const shockMat = new THREE.MeshBasicMaterial({
-      color: 0xffffff,
+      color: 0xffbe0b,
       transparent: true,
-      opacity: 0.8,
-      side: THREE.DoubleSide
+      opacity: 0.88,
+      side: THREE.DoubleSide,
+      depthWrite: false
     });
     const shockMesh = new THREE.Mesh(this.shockwaveGeo, shockMat);
-    shockMesh.position.set(pos.x, pos.y + 0.05, pos.z);
+    shockMesh.position.set(pos.x, pos.y + 0.06, pos.z);
     this.scene.add(shockMesh);
 
     this.shockwaves.push({
       mesh: shockMesh,
-      scale: 0.3,
-      maxScale: 2.2 * Math.min(force, 2.0),
-      speed: 8.0,
-      opacity: 0.8
+      scale: 0.32,
+      maxScale: 2.35 * Math.min(force, 2.0),
+      speed: 8.5,
+      opacity: 0.88
     });
 
-    // 2. Comic Impact Stars flying outwards
-    const starCount = Math.floor(5 + force * 4);
+    // 2. Vibrant Multi-Color Impact Stars flying outwards
+    const starPalette = [0xffbe0b, 0xff006e, 0x3a86ff, 0xffffff];
+    const starCount = Math.floor(6 + force * 4);
     for (let i = 0; i < starCount; i++) {
       const starMat = new THREE.MeshBasicMaterial({
-        color: Math.random() > 0.4 ? 0xffeb3b : 0xff5722,
+        color: starPalette[i % starPalette.length],
         transparent: true,
-        opacity: 0.95
+        opacity: 0.96
       });
       const star = new THREE.Mesh(this.starGeo, starMat);
-      star.position.set(pos.x, pos.y + 0.5 + (Math.random() - 0.5) * 0.4, pos.z);
+      star.position.set(pos.x, pos.y + 0.55 + (Math.random() - 0.5) * 0.4, pos.z);
       this.scene.add(star);
 
       const angle = (i / starCount) * Math.PI * 2 + Math.random() * 0.5;
-      const speed = 2.5 + Math.random() * 3.5 * force;
+      const speed = 2.6 + Math.random() * 3.6 * force;
       const vel = new THREE.Vector3(
         Math.cos(angle) * speed,
-        1.5 + Math.random() * 2.5,
+        1.6 + Math.random() * 2.6,
         Math.sin(angle) * speed
       );
 
@@ -122,24 +142,24 @@ export class ParticleSystem {
         vel,
         rot: new THREE.Vector3(Math.random() * 8, Math.random() * 8, Math.random() * 8),
         growth: 0.5,
-        fadeRate: 2.5,
+        fadeRate: 2.4,
         life: 1.0,
-        gravity: 6.0
+        gravity: 6.2
       });
     }
   }
 
-  // Dramatic ring crumbling rock chunks and dust clouds when ring shrinks
+  // Dramatic ring crumbling terracotta & grassy turf chunks when ring shrinks
   emitRingCrumble(centerPos, fromRadius, toRadius) {
-    const chunkCount = 35;
+    const chunkCount = 36;
     for (let i = 0; i < chunkCount; i++) {
       const angle = (i / chunkCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.2;
       const r = toRadius + (fromRadius - toRadius) * Math.random();
       const x = centerPos.x + Math.cos(angle) * r;
       const z = centerPos.z + Math.sin(angle) * r;
 
-      // 3D rock chunk
-      const rock = new THREE.Mesh(this.rockGeo, this.rockMat);
+      const mat = i % 4 === 0 ? this.turfMat : this.rockMat;
+      const rock = new THREE.Mesh(this.rockGeo, mat);
       rock.position.set(x, centerPos.y + 0.1, z);
       const scale = 0.5 + Math.random() * 0.9;
       rock.scale.set(scale, scale * (0.8 + Math.random() * 0.5), scale);
@@ -164,7 +184,6 @@ export class ParticleSystem {
         life: 2.5
       });
 
-      // Companion dust puff
       if (i % 2 === 0) {
         this.emitDustPuff(new THREE.Vector3(x, centerPos.y, z));
       }
@@ -196,7 +215,11 @@ export class ParticleSystem {
 
       if (p.life <= 0) {
         this.scene.remove(p.mesh);
-        if (p.mesh.geometry !== this.puffGeo && p.mesh.geometry !== this.sparkGeo && p.mesh.geometry !== this.starGeo) {
+        if (
+          p.mesh.geometry !== this.puffGeo &&
+          p.mesh.geometry !== this.sparkGeo &&
+          p.mesh.geometry !== this.starGeo
+        ) {
           p.mesh.geometry.dispose();
         }
         if (p.mesh.material) p.mesh.material.dispose();
@@ -229,9 +252,8 @@ export class ParticleSystem {
       r.mesh.rotation.y += r.rotVel.y * dt;
       r.mesh.rotation.z += r.rotVel.z * dt;
 
-      if (r.life <= 0 || r.mesh.position.y < -15) {
+      if (r.life <= 0 || r.mesh.position.y < -18) {
         this.scene.remove(r.mesh);
-        r.mesh.geometry.dispose();
         this.rockDebris.splice(i, 1);
       }
     }
