@@ -10,6 +10,7 @@ import { SpectatorCamera } from './camera.js';
 import { UIManager } from './ui.js';
 import { LandingManager } from './landing.js';
 import { SUMO_ROSTER } from './roster.js';
+import { SumoModelLoader } from './modelLoader.js';
 
 class GameApp {
   constructor() {
@@ -186,6 +187,18 @@ class GameApp {
         this.activeRoster = selectedWrestlers;
         this.championId = championId;
         this.startNewMatch();
+      }
+    });
+
+    // Optional plug-and-play custom .glb probe (falls back silently to 1:1 procedural sculpt)
+    this.modelLoader = SumoModelLoader;
+    SumoModelLoader.loadOptionalCustomModel().then(loaded => {
+      if (loaded) {
+        if (this.matchActive) {
+          this.startNewMatch();
+        } else {
+          this.spawnShowcaseSumos();
+        }
       }
     });
   }

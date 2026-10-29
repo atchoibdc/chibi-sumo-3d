@@ -1,5 +1,11 @@
 import * as THREE from 'three';
 import { ChibiTextureFactory } from './chibiTexture.js';
+import { SumoModelLoader } from './modelLoader.js';
+
+function smoothstep(edge0, edge1, x) {
+  const t = THREE.MathUtils.clamp((x - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
 
 export class ChibiSumo {
   constructor(scene, config, particles) {
@@ -8,7 +14,7 @@ export class ChibiSumo {
     this.id = config.id;
     this.name = config.name;
     this.title = config.title || 'Sekiwake';
-    this.mawashiColor = config.mawashiColor || 0xd62828;
+    this.mawashiColor = config.mawashiColor || 0xd90429;
     this.skinColor = config.skinColor || 0xffcbb2;
     this.mass = config.mass || 1.0;
     this.speed = config.speed || 1.0;
@@ -16,13 +22,13 @@ export class ChibiSumo {
     this.personality = config.personality || 'Balanced';
     this.isChampion = Boolean(config.isChampion);
 
-    // Cosmetic-only mass proportions (keeps collision radius identical for fair gameplay)
+    // Subtle cosmetic mass proportions while staying faithful to CHIBI SUMO #1 turnaround sheet
     const massNorm = THREE.MathUtils.clamp((this.mass - 0.85) / 0.65, 0, 1);
-    this.bellyHeft = 0.92 + massNorm * 0.24;     // 0.92x (nimble) -> 1.16x (super heavy)
-    this.shoulderHeft = 0.95 + massNorm * 0.14;  // 0.95x -> 1.09x
+    this.bellyHeft = 0.96 + massNorm * 0.10;
+    this.shoulderHeft = 0.97 + massNorm * 0.07;
     this.traitVariant = this.resolveTraitVariant(this.personality);
 
-    // Physics collision radius (unchanged)
+    // Physics collision radius (unchanged for fair gameplay)
     this.radius = 1.05;
     this.pos = new THREE.Vector3(config.x || 0, 0, config.z || 0);
     this.vel = new THREE.Vector3(0, 0, 0);
@@ -43,6 +49,7 @@ export class ChibiSumo {
     this.idlePhase = Math.random() * Math.PI * 2;
     this.slapTimer = 0;
     this.currentFaceState = 'normal';
+    this.inTPose = false;
 
     // Natural Eye Blinking Cycle
     this.blinkTimer = 1.8 + Math.random() * 2.6;
@@ -53,21 +60,29 @@ export class ChibiSumo {
     this.root = new THREE.Group();
     this.bodyGroup = new THREE.Group();
     this.bellyMesh = null;
-    this.chestMesh = null;
     this.headGroup = new THREE.Group();
+    this.headBaseY = 2.21;
     this.leftArm = null;
     this.rightArm = null;
+    this.leftForeArm = null;
+    this.rightForeArm = null;
+    this.leftHand = null;
+    this.rightHand = null;
     this.leftLeg = null;
     this.rightLeg = null;
     this.topknot = null;
+    this.topknotBaseRotX = -0.52;
+    this.leftBrow = null;
+    this.rightBrow = null;
     this.auraMesh = null;
     this.auraRingMesh = null;
     this.faceMesh = null;
     this.faceTextureObj = null;
     this.sweatDrop = null;
-    this.sagariPivots = [];
     this.championRingMesh = null;
     this.contactShadowMesh = null;
+    this.isCustomModel = false;
+    this.mixer = null;
 
     // Harmonic spring for squishy belly bounces
     this.squash = new THREE.Vector3(1, 1, 1);
@@ -87,82 +102,8 @@ export class ChibiSumo {
   }
 
   buildFaithfulModel() {
-    // 1. Toy-Grade Materials with Warm Subsurface Daylight Bounce
-    const skinBaseColor = new THREE.Color(this.skinColor);
-    const warmSubsurface = skinBaseColor.clone().lerp(new THREE.Color(0xff7b6b), 0.35).multiplyScalar(0.11);
-
-    // Clean smooth vinyl skin for head, limbs, hands, feet (no torso navel texture!)
-    const skinMat = new THREE.MeshStandardMaterial({
-      color: skinBaseColor,
-      emissive: warmSubsurface,
-      roughness: 0.52,
-      metalness: 0.02
-    });
-
-    // Warm rosy blush-tinted skin for cute 3D nose, inner ears, and plump toe/finger pads
-    const rosyColor = skinBaseColor.clone().lerp(new THREE.Color(0xff758f), 0.32);
-    const rosySkinMat = new THREE.MeshStandardMaterial({
-      color: rosyColor,
-      emissive: rosyColor.clone().multiplyScalar(0.10),
-      roughness: 0.50,
-      metalness: 0.02
-    });
-
-    // Dedicated non-multiplying Full Seamless Torso skin texture (color: 0xffffff preserves exact skin tone)
-    const torsoTexture = ChibiTextureFactory.createTorsoTexture(this.skinColor, 'full');
-    const torsoSkinMat = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      map: torsoTexture,
-      emissive: warmSubsurface,
-      roughness: 0.52,
-      metalness: 0.02
-    });
-
-    const hairTexture = ChibiTextureFactory.createHairTexture();
-    const hairMat = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      map: hairTexture,
-      roughness: 0.36,
-      metalness: 0.18
-    });
-
-    const ribbonMat = new THREE.MeshStandardMaterial({
-      color: this.isChampion ? 0xffbe0b : 0xe6192e,
-      roughness: 0.35,
-      metalness: this.isChampion ? 0.45 : 0.12
-    });
-
-    const mawashiTexture = ChibiTextureFactory.createMawashiTexture(this.mawashiColor);
-    const mawashiMat = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      map: mawashiTexture,
-      roughness: 0.46,
-      metalness: 0.12
-    });
-
-    const mawashiAccentColor = new THREE.Color(this.mawashiColor).lerp(new THREE.Color(0xffffff), 0.25);
-    const sagariAltMat = new THREE.MeshStandardMaterial({
-      color: mawashiAccentColor,
-      roughness: 0.42,
-      metalness: 0.15
-    });
-
-    const tapeMat = new THREE.MeshStandardMaterial({
-      color: 0xfafcff,
-      roughness: 0.72,
-      metalness: 0.02
-    });
-
-    const goldMat = new THREE.MeshStandardMaterial({
-      color: 0xffd166,
-      emissive: 0xff9f1c,
-      emissiveIntensity: 0.16,
-      roughness: 0.28,
-      metalness: 0.65
-    });
-
-    // 2. Soft Ground Contact Shadow & Champion Floor Halo
-    const shadowGeo = new THREE.CircleGeometry(0.95 * this.bellyHeft, 24);
+    // 1. Shared Ground Contact Shadow & Champion Golden Floor Ring
+    const shadowGeo = new THREE.CircleGeometry(0.88 * this.bellyHeft, 24);
     shadowGeo.rotateX(-Math.PI / 2);
     const shadowMat = new THREE.MeshBasicMaterial({
       map: ChibiTextureFactory.createContactShadowTexture(),
@@ -173,13 +114,14 @@ export class ChibiSumo {
     this.contactShadowMesh.position.y = 0.015;
     this.root.add(this.contactShadowMesh);
 
+    // Champion is marked solely by the pulsing golden floor ring beneath their feet
     if (this.isChampion) {
-      const champRingGeo = new THREE.RingGeometry(1.02, 1.18, 40);
+      const champRingGeo = new THREE.RingGeometry(0.98, 1.15, 44);
       champRingGeo.rotateX(-Math.PI / 2);
       const champRingMat = new THREE.MeshBasicMaterial({
         color: 0xffd166,
         transparent: true,
-        opacity: 0.75,
+        opacity: 0.78,
         side: THREE.DoubleSide,
         depthWrite: false
       });
@@ -188,63 +130,151 @@ export class ChibiSumo {
       this.root.add(this.championRingMesh);
     }
 
-    // 3. Seamless Pear-Cheek Chibi Head, Curved Face, 3D Nose, Ears & Oichomage Topknot
-    const headRadius = 0.69;
-    const headScaleX = 1.07;
-    const headScaleY = 0.96;
-    const headScaleZ = 1.02;
-    const headY = 1.77;
+    // Shared Combat Aura Halos & Edge-Teetering Sweat Drop
+    this.buildCombatFX();
 
-    // Helper: Smooth pear-shaped lower-cheek chibi sculpt (zero separate spheres, 100% concentric!)
-    const sculptPearCheeks = (geo, rRef) => {
+    // 2. Plug-and-Play Custom .glb Model Override (if public/models/chibi-sumo.glb is present)
+    const customInstance = SumoModelLoader.createInstance(this.mawashiColor);
+    if (customInstance) {
+      this.isCustomModel = true;
+      this.bodyGroup.add(customInstance.modelGroup);
+      if (customInstance.animations && customInstance.animations.length > 0) {
+        this.mixer = new THREE.AnimationMixer(customInstance.modelGroup);
+        const action = this.mixer.clipAction(customInstance.animations[0]);
+        action.play();
+      }
+      this.root.add(this.bodyGroup);
+      return;
+    }
+
+    // 3. 1:1 Reference-Faithful Procedural Sculpt ("CHIBI SUMO #1 - 3D MODEL REFERENCE")
+    const skinBaseColor = ChibiTextureFactory.resolveWarmSkinColor(this.skinColor);
+    const warmSubsurface = skinBaseColor.clone().lerp(new THREE.Color(0xff745c), 0.38).multiplyScalar(0.10);
+
+    const skinMat = new THREE.MeshStandardMaterial({
+      color: skinBaseColor,
+      emissive: warmSubsurface,
+      roughness: 0.54,
+      metalness: 0.02
+    });
+
+    // Natural warm peach-terracotta accent for 3D nose & inner ear hollow (not pink)
+    const noseColor = skinBaseColor.clone().lerp(new THREE.Color(0xe8886e), 0.18);
+    const noseSkinMat = new THREE.MeshStandardMaterial({
+      color: noseColor,
+      emissive: noseColor.clone().multiplyScalar(0.08),
+      roughness: 0.52,
+      metalness: 0.02
+    });
+
+    const torsoTexture = ChibiTextureFactory.createTorsoTexture(this.skinColor);
+    const torsoSkinMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      map: torsoTexture,
+      emissive: warmSubsurface,
+      roughness: 0.54,
+      metalness: 0.02
+    });
+
+    // Matte-satin warm espresso-chocolate brown hair matching reference sheet
+    const hairTexture = ChibiTextureFactory.createHairTexture();
+    const hairMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      map: hairTexture,
+      roughness: 0.58,
+      metalness: 0.03
+    });
+
+    const browMat = new THREE.MeshStandardMaterial({
+      color: 0x2e211d,
+      roughness: 0.68,
+      metalness: 0.02
+    });
+
+    // Vivid crimson topknot cord band matching CHIBI SUMO #1 across all views
+    const motoyuiRedMat = new THREE.MeshStandardMaterial({
+      color: 0xc92027,
+      roughness: 0.44,
+      metalness: 0.06
+    });
+
+    // Clean matte-satin folded cloth mawashi material
+    const mawashiTexture = ChibiTextureFactory.createMawashiTexture(this.mawashiColor);
+    const mawashiMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      map: mawashiTexture,
+      roughness: 0.55,
+      metalness: 0.05
+    });
+
+    // ================= A. HEAD, FACE, 3D BROWS, PROFILE NOSE, EARS & HAIR =================
+    const headRadius = 0.50;
+    const headScaleX = 1.07;
+    const headScaleY = 0.89;
+    const headScaleZ = 1.01;
+    const headY = this.headBaseY;
+
+    // Shared skull/cheek/brow/jaw vertex sculpt (identical for headMesh, faceMesh, and hair base)
+    const sculptHeadShape = (geo, rRef) => {
       const pos = geo.attributes.position;
       for (let i = 0; i < pos.count; i++) {
-        let x = pos.getX(i);
-        let y = pos.getY(i);
-        let z = pos.getZ(i);
-        const ny = y / rRef;
-        // Soft Gaussian expansion in lower cheeks (ny around -0.28), zero distortion at upper hairline
-        const cheekBell = Math.exp(-Math.pow((ny + 0.28) / 0.34, 2));
-        const frontBias = 0.65 + 0.35 * Math.max(0, z / rRef);
-        x *= headScaleX * (1.0 + 0.085 * cheekBell * frontBias);
-        y *= headScaleY;
-        z *= headScaleZ * (1.0 + 0.045 * cheekBell * frontBias);
-        pos.setXYZ(i, x, y, z);
+        const vx = pos.getX(i);
+        const vy = pos.getY(i);
+        const vz = pos.getZ(i);
+        const ny = vy / rRef;
+        const nz = vz / rRef;
+
+        // Plump lower-cheek pear fullness (ny ≈ -0.28)
+        const cheekBell = Math.exp(-Math.pow((ny + 0.28) / 0.36, 2));
+        const frontCheekBias = smoothstep(-0.25, 0.55, nz);
+
+        // Subtle brow-ridge fullness for crisp Side View profile (ny ≈ +0.32, nz > 0.5)
+        const browRidge = 0.030 * Math.exp(-Math.pow((ny - 0.32) / 0.16, 2)) * smoothstep(0.45, 0.90, nz);
+
+        // Plump rounded chin/jaw cushion (ny ≈ -0.80, nz > 0.15)
+        const chinFullness = 0.036 * Math.exp(-Math.pow((ny + 0.80) / 0.22, 2)) * smoothstep(0.10, 0.72, nz);
+
+        const sx = headScaleX * (1.0 + 0.085 * cheekBell * frontCheekBias);
+        const sy = headScaleY;
+        const sz = headScaleZ * (1.0 + 0.048 * cheekBell * frontCheekBias + browRidge + chinFullness);
+
+        pos.setXYZ(i, vx * sx, vy * sy, vz * sz);
       }
       geo.computeVertexNormals();
     };
 
-    // Smooth neck bridge
-    const neckGeo = new THREE.CylinderGeometry(0.30, 0.38, 0.26, 16);
+    // Short sturdy neck tucked cleanly inside upper torso (zero visible cylinder lip in Side/Back views)
+    const neckGeo = new THREE.CylinderGeometry(0.27, 0.29, 0.26, 22);
     const neckMesh = new THREE.Mesh(neckGeo, skinMat);
-    neckMesh.position.set(0, 1.32, 0.02);
+    neckMesh.position.set(0, 1.83, 0.01);
+    neckMesh.castShadow = true;
     this.bodyGroup.add(neckMesh);
 
-    // Main seamless pear-cheek chibi head
-    const headGeo = new THREE.SphereGeometry(headRadius, 36, 28);
-    sculptPearCheeks(headGeo, headRadius);
+    // Main seamless chibi head
+    const headGeo = new THREE.SphereGeometry(headRadius, 48, 36);
+    sculptHeadShape(headGeo, headRadius);
     const headMesh = new THREE.Mesh(headGeo, skinMat);
     headMesh.position.y = headY;
     headMesh.castShadow = true;
     headMesh.receiveShadow = true;
     this.headGroup.add(headMesh);
 
-    // Concentric Curved Spherical Face Decal (uses identical sculptPearCheeks so it wraps with 0 seams!)
+    // Concentric Curved Face Shell (wide phiLen=1.60 so eyes remain visible in 90° Side View!)
     this.faceTextureObj = ChibiTextureFactory.createFaceTexture('normal', this.traitVariant);
-    const phiLen = 1.30;
-    const thetaCenter = Math.PI * 0.515;
-    const thetaLen = 0.76;
-    const faceRadius = headRadius * 1.008;
+    const phiLen = 1.60;
+    const thetaStart = 0.92;
+    const thetaLen = 1.40;
+    const faceRadius = headRadius * 1.007;
     const faceGeo = new THREE.SphereGeometry(
       faceRadius,
+      36,
       28,
-      20,
       Math.PI * 0.5 - phiLen * 0.5,
       phiLen,
-      thetaCenter - thetaLen * 0.5,
+      thetaStart,
       thetaLen
     );
-    sculptPearCheeks(faceGeo, faceRadius);
+    sculptHeadShape(faceGeo, faceRadius);
     const faceMat = new THREE.MeshBasicMaterial({
       map: this.faceTextureObj.texture,
       transparent: true,
@@ -256,354 +286,435 @@ export class ChibiSumo {
     this.faceMesh.position.y = headY;
     this.headGroup.add(this.faceMesh);
 
-    // Cute 3D Sculpted Button Nose
-    const noseGeo = new THREE.SphereGeometry(0.050, 14, 12);
-    noseGeo.scale(1.18, 0.88, 0.95);
-    const noseMesh = new THREE.Mesh(noseGeo, rosySkinMat);
-    noseMesh.position.set(0, headY - 0.074, headRadius * headScaleZ * 1.032);
+    // 3D Sculpted Chunky Capsule Eyebrows (aligned flush over 2D brow shadow for seamless Front + Side 3D relief)
+    const create3DBrow = (isLeft) => {
+      const side = isLeft ? -1 : 1;
+      const browGeo = new THREE.CapsuleGeometry(0.036, 0.118, 8, 12);
+      browGeo.rotateZ(Math.PI / 2);
+      browGeo.scale(1.0, 1.0, 0.42);
+      const bPos = browGeo.attributes.position;
+      for (let i = 0; i < bPos.count; i++) {
+        const bx = bPos.getX(i);
+        const bz = bPos.getZ(i);
+        bPos.setZ(i, bz - bx * bx * 1.25);
+      }
+      browGeo.computeVertexNormals();
+
+      const browMesh = new THREE.Mesh(browGeo, browMat);
+      browMesh.position.set(side * 0.165, headY + 0.146, 0.468);
+      browMesh.rotation.y = side * 0.30;
+      browMesh.rotation.x = -0.20;
+      browMesh.rotation.z = side * 0.21;
+      browMesh.castShadow = true;
+      return browMesh;
+    };
+    this.leftBrow = create3DBrow(true);
+    this.rightBrow = create3DBrow(false);
+    this.headGroup.add(this.leftBrow);
+    this.headGroup.add(this.rightBrow);
+
+    // 3D Skin-Toned Upturned Profile Nose
+    const noseGeo = new THREE.SphereGeometry(0.056, 18, 14);
+    const nPos = noseGeo.attributes.position;
+    for (let i = 0; i < nPos.count; i++) {
+      const x = nPos.getX(i);
+      const y = nPos.getY(i);
+      const z = nPos.getZ(i);
+      const ny = y / 0.056;
+      const baseFlare = 1.0 + 0.18 * Math.max(0, -ny);
+      const tipLift = z > 0 ? 0.010 * (z / 0.056) : 0;
+      nPos.setXYZ(i, x * 1.12 * baseFlare, y * 0.90 + tipLift, z * 1.12);
+    }
+    noseGeo.computeVertexNormals();
+    const noseMesh = new THREE.Mesh(noseGeo, noseSkinMat);
+    noseMesh.position.set(0, headY - 0.088, 0.502);
     noseMesh.castShadow = true;
     this.headGroup.add(noseMesh);
 
-    // Sculpted Chibi Ears with Rounded Outer Helix & Warm Rosy Inner Hollow
+    // Sculpted C-Cupped Chibi Ears
     [-1, 1].forEach(side => {
       const earGroup = new THREE.Group();
-      const outerEarGeo = new THREE.SphereGeometry(0.14, 14, 12);
-      outerEarGeo.scale(0.45, 1.08, 0.86);
+      const outerEarGeo = new THREE.SphereGeometry(0.118, 16, 14);
+      outerEarGeo.scale(0.46, 1.06, 0.86);
       const outerEar = new THREE.Mesh(outerEarGeo, skinMat);
       outerEar.castShadow = true;
       earGroup.add(outerEar);
 
-      const innerEarGeo = new THREE.SphereGeometry(0.085, 10, 10);
-      innerEarGeo.scale(0.42, 0.92, 0.75);
-      const innerEar = new THREE.Mesh(innerEarGeo, rosySkinMat);
-      innerEar.position.set(side * 0.012, -0.01, 0.044);
+      const innerEarGeo = new THREE.SphereGeometry(0.072, 12, 10);
+      innerEarGeo.scale(0.42, 0.88, 0.72);
+      const innerEar = new THREE.Mesh(innerEarGeo, noseSkinMat);
+      innerEar.position.set(side * 0.012, -0.008, 0.036);
       earGroup.add(innerEar);
 
-      earGroup.position.set(side * headRadius * headScaleX * 1.01, headY - 0.04, 0.02);
-      earGroup.rotation.y = -side * 0.22;
-      earGroup.rotation.z = -side * 0.08;
+      earGroup.position.set(side * 0.556, headY - 0.022, -0.032);
+      earGroup.rotation.y = -side * 0.20;
+      earGroup.rotation.z = -side * 0.06;
       this.headGroup.add(earGroup);
     });
 
-    // Waxed Sumo Hair Dome + Temple Sideburns (Bin)
-    // Tilted backward (-0.36 rad) so front forehead stays open & cute (~64°) while back sweeps smoothly down nape (~105°)!
-    const hairCapGeo = new THREE.SphereGeometry(headRadius * 1.018, 32, 22, 0, Math.PI * 2, 0, Math.PI * 0.47);
-    hairCapGeo.scale(headScaleX, headScaleY, headScaleZ);
-    const hairCap = new THREE.Mesh(hairCapGeo, hairMat);
-    hairCap.position.set(0, headY + 0.02, -0.02);
-    hairCap.rotation.x = -0.36;
-    hairCap.castShadow = true;
-    this.headGroup.add(hairCap);
+    // Watertight Sculpted 3D Hair Subtool:
+    // Widow's-peak M-hairline + puffed Bin temple wings + C-ear cutout + tapered lower Tabo back bulb
+    const hairGeo = new THREE.SphereGeometry(headRadius, 84, 64);
+    hairGeo.rotateY(-Math.PI * 0.5);
 
-    // Sculpted Sumo Sideburn Locks (Bin) tucked seamlessly into temple hairline
-    const sideburnGeo = new THREE.CapsuleGeometry(0.052, 0.15, 6, 10);
-    [-1, 1].forEach(side => {
-      const sb = new THREE.Mesh(sideburnGeo, hairMat);
-      sb.position.set(side * headRadius * headScaleX * 0.96, headY + 0.08, 0.18);
-      sb.rotation.z = side * 0.18;
-      sb.rotation.x = 0.28;
-      this.headGroup.add(sb);
-    });
-
-    // Oichomage (Ginkgo-Leaf Fan Sumo Topknot) pivoted at crown for lively bounce
-    this.topknot = new THREE.Group();
-    this.topknot.position.set(0, headY + 0.62, -0.06);
-
-    // Gathered crown hair root
-    const stemBaseGeo = new THREE.SphereGeometry(0.15, 14, 12);
-    stemBaseGeo.scale(1.05, 0.85, 1.15);
-    const stemBase = new THREE.Mesh(stemBaseGeo, hairMat);
-    stemBase.position.set(0, 0.02, -0.05);
-    stemBase.castShadow = true;
-    this.topknot.add(stemBase);
-
-    // Arched hair stem sweeping forward
-    const stemGeo = new THREE.CapsuleGeometry(0.092, 0.14, 8, 12);
-    const stemMesh = new THREE.Mesh(stemGeo, hairMat);
-    stemMesh.position.set(0, 0.11, -0.01);
-    stemMesh.rotation.x = 0.38;
-    stemMesh.castShadow = true;
-    this.topknot.add(stemMesh);
-
-    // Wrapped Silk Motoyui Tie Band
-    const tieGeo = new THREE.CylinderGeometry(0.102, 0.112, 0.092, 16);
-    const tieMesh = new THREE.Mesh(tieGeo, ribbonMat);
-    tieMesh.position.set(0, 0.13, 0.0);
-    tieMesh.rotation.x = 0.38;
-    this.topknot.add(tieMesh);
-
-    // Ginkgo-Leaf Splayed Fan Crest (Oichomage)
-    const fanGroup = new THREE.Group();
-    fanGroup.position.set(0, 0.21, 0.07);
-    fanGroup.rotation.x = 0.62;
-    const lobeCount = 7;
-    for (let i = 0; i < lobeCount; i++) {
-      const t = (i / (lobeCount - 1)) - 0.5;
-      const lobeLen = 0.155 - Math.abs(t) * 0.045;
-      const lobeGeo = new THREE.CapsuleGeometry(0.046, lobeLen, 6, 10);
-      lobeGeo.scale(1.12, 1.0, 0.62);
-      const lobe = new THREE.Mesh(lobeGeo, hairMat);
-      lobe.position.set(t * 0.33, Math.cos(t * 2.0) * 0.04, 0);
-      lobe.rotation.z = -t * 0.95;
-      lobe.castShadow = true;
-      fanGroup.add(lobe);
+    const hPos = hairGeo.attributes.position;
+    const unitDirs = new Float32Array(hPos.count * 3);
+    for (let i = 0; i < hPos.count; i++) {
+      unitDirs[i * 3] = hPos.getX(i) / headRadius;
+      unitDirs[i * 3 + 1] = hPos.getY(i) / headRadius;
+      unitDirs[i * 3 + 2] = hPos.getZ(i) / headRadius;
     }
-    this.topknot.add(fanGroup);
-    this.headGroup.add(this.topknot);
 
-    this.bodyGroup.add(this.headGroup);
+    sculptHeadShape(hairGeo, headRadius);
 
-    // 4. Single Unified Seamless Sculpted Sumo Torso (Chest + Round Potbelly with ZERO crease!)
-    const torsoGeo = new THREE.SphereGeometry(1.0, 36, 28);
-    torsoGeo.rotateY(-Math.PI * 0.5); // Centers UV u=0.5 squarely on +Z front!
-    const tPos = torsoGeo.attributes.position;
-    for (let i = 0; i < tPos.count; i++) {
-      const x = tPos.getX(i);
-      const ny = tPos.getY(i); // -1 (hips) .. +1 (neck)
-      const z = tPos.getZ(i);
+    for (let i = 0; i < hPos.count; i++) {
+      const nx = unitDirs[i * 3];
+      const ny = unitDirs[i * 3 + 1];
+      const nz = unitDirs[i * 3 + 2];
+      const absX = Math.abs(nx);
 
-      // Smooth potbelly fullness curve peaking around ny = -0.18 (just above mawashi top roll)
-      const bellyBulge = Math.exp(-Math.pow((ny + 0.18) / 0.48, 2));
-      const chestBroad = Math.exp(-Math.pow((ny - 0.35) / 0.36, 2));
+      let x = hPos.getX(i);
+      let y = hPos.getY(i);
+      let z = hPos.getZ(i);
 
-      const rx = (0.78 * this.bellyHeft * (0.94 + 0.10 * bellyBulge)) + (0.08 * this.shoulderHeft * chestBroad);
-      const ry = 0.48; // spans y = 0.92 ± 0.48 -> [0.44 .. 1.40], leaving full cute chin visible!
+      // 1. Forehead M-shaped widow's-peak curve
+      const browArch = 0.088 * Math.exp(-Math.pow((absX - 0.34) / 0.24, 2));
+      const widowDip = -0.055 * Math.exp(-Math.pow(nx / 0.16, 2));
+      const templeDrop = -0.56 * Math.pow(Math.max(0, (absX - 0.54) / 0.36), 1.75);
+      const frontHairlineY = 0.62 + browArch + widowDip + templeDrop;
 
-      let rz;
-      if (z >= 0) {
-        // Front profile: sloped upper chest behind chin, swelling smoothly into plump round potbelly
-        rz = 0.50 + (0.42 * this.bellyHeft * bellyBulge);
-      } else {
-        // Back profile: sturdy muscular sumo back
-        rz = 0.72 * this.bellyHeft * (1.0 - 0.16 * Math.max(0, ny));
+      const faceCut = smoothstep(frontHairlineY + 0.048, frontHairlineY - 0.048, ny)
+        * smoothstep(0.10, 0.24, nz)
+        * smoothstep(0.92, 0.80, absX);
+
+      // 2. Ear C-shaped pocket cutout around (ny = -0.04, nz = -0.06)
+      const earDist = Math.hypot((ny + 0.04) / 0.29, (nz + 0.06) / 0.20);
+      const earCut = smoothstep(1.08, 0.82, earDist) * smoothstep(0.55, 0.72, absX);
+
+      // 3. Lower cheek / jaw / nape bottom hairline:
+      // Keeps lower jaw 100% clear in Front View while sweeping down to nape (ny = -0.80) in Back/Side View
+      const bottomHairlineY = 0.00 - 0.80 * smoothstep(0.10, -0.36, nz);
+      const sideburnTab = smoothstep(0.76, 0.86, absX)
+        * smoothstep(0.06, 0.14, nz)
+        * smoothstep(0.28, 0.19, nz)
+        * smoothstep(-0.06, 0.03, ny);
+      const jawCut = smoothstep(bottomHairlineY + 0.05, bottomHairlineY - 0.05, ny) * (1.0 - 0.85 * sideburnTab);
+
+      const cutAmount = Math.max(faceCut, earCut, jawCut);
+      const cov = 1.0 - cutAmount;
+
+      const radialOffset = -0.055 * (1.0 - cov) + 0.040 * cov;
+      const rLen = Math.hypot(x, y, z) || 1;
+      x += (x / rLen) * radialOffset;
+      y += (y / rLen) * radialOffset;
+      z += (z / rLen) * radialOffset;
+
+      if (cov > 0.01) {
+        // Puffed rounded Bin side-hair lobes above ears
+        const binHeight = Math.exp(-Math.pow((ny - 0.26) / 0.32, 2));
+        const binSide = smoothstep(0.38, 0.78, absX);
+        const binPuff = 0.064 * binHeight * binSide * cov;
+        x += Math.sign(nx) * binPuff;
+        y += 0.020 * binHeight * binSide * cov;
+
+        // Voluminous rounded back-of-head hair bulb (Tabo) that tapers cleanly inward toward neck
+        if (nz < 0.08) {
+          const backFactor = smoothstep(0.08, -0.55, nz);
+          const bulbVertical = Math.exp(-Math.pow((ny + 0.08) / 0.56, 2));
+          const taboDepth = 0.140 * backFactor * bulbVertical * cov;
+          z -= taboDepth;
+
+          // Taper lower back hair width below ear level so Front View jaw stays clean & Back View tapers gracefully!
+          const lowerNeckTaper = smoothstep(0.06, -0.72, ny) * smoothstep(0.06, -0.25, nz);
+          x *= 1.0 - 0.16 * lowerNeckTaper * cov;
+        }
+
+        // Delicate sculpted combed strand fluting converging toward crown
+        const meridianAngle = Math.atan2(nx, -nz);
+        const strandWave = 0.0040 * Math.cos(meridianAngle * 22) * cov * cov * (1.0 - Math.abs(ny) * 0.5);
+        x += nx * strandWave;
+        z += nz * strandWave;
       }
 
-      const forwardBellyShift = 0.10 * this.bellyHeft * bellyBulge;
-      tPos.setXYZ(i, x * rx, ny * ry, z * rz + forwardBellyShift);
+      hPos.setXYZ(i, x, y, z);
+    }
+    hairGeo.computeVertexNormals();
+
+    const hairMesh = new THREE.Mesh(hairGeo, hairMat);
+    hairMesh.position.y = headY;
+    hairMesh.castShadow = true;
+    hairMesh.receiveShadow = true;
+    this.headGroup.add(hairMesh);
+
+    // Plump Round Backward-Angled Chonmage Bun + Vivid Crimson Motoyui Band
+    this.topknot = new THREE.Group();
+    this.topknot.position.set(0, headY + 0.435, -0.165);
+    this.topknot.rotation.x = this.topknotBaseRotX;
+
+    const tieGeo = new THREE.TorusGeometry(0.146, 0.035, 16, 36);
+    tieGeo.scale(1.12, 1.0, 1.04);
+    tieGeo.rotateX(Math.PI / 2);
+    const tieMesh = new THREE.Mesh(tieGeo, motoyuiRedMat);
+    tieMesh.position.set(0, 0.052, 0);
+    tieMesh.castShadow = true;
+    this.topknot.add(tieMesh);
+
+    const bunGeo = new THREE.SphereGeometry(0.202, 36, 26);
+    bunGeo.rotateY(-Math.PI * 0.5);
+    const bunPos = bunGeo.attributes.position;
+    for (let i = 0; i < bunPos.count; i++) {
+      const bx = bunPos.getX(i);
+      const by = bunPos.getY(i);
+      const bz = bunPos.getZ(i);
+      const r = 0.202;
+      const nx = bx / r;
+      const ny = by / r;
+      const nz = bz / r;
+      const ang = Math.atan2(nx, -nz);
+      const flute = 1.0 + 0.022 * Math.cos(ang * 18) * (1.0 - ny * ny);
+      const topDimple = ny > 0.65 ? -0.018 * Math.pow((ny - 0.65) / 0.35, 2) : 0;
+      bunPos.setXYZ(i, bx * 1.18 * flute, by * 0.88 + topDimple, bz * 1.08 * flute);
+    }
+    bunGeo.computeVertexNormals();
+    const bunMesh = new THREE.Mesh(bunGeo, hairMat);
+    bunMesh.position.set(0, 0.160, 0);
+    bunMesh.castShadow = true;
+    bunMesh.receiveShadow = true;
+    this.topknot.add(bunMesh);
+
+    this.headGroup.add(this.topknot);
+    this.bodyGroup.add(this.headGroup);
+
+    // ================= B. UNIFIED S-CURVE TORSO, SMOOTH POTBELLY & SPINE =================
+    const torsoGeo = new THREE.SphereGeometry(1.0, 60, 46);
+    torsoGeo.rotateY(-Math.PI * 0.5);
+    const tPos = torsoGeo.attributes.position;
+    for (let i = 0; i < tPos.count; i++) {
+      const nx = tPos.getX(i);
+      const ny = tPos.getY(i); // -1 (hips) .. +1 (neck)
+      const nz = tPos.getZ(i);
+      const absX = Math.abs(nx);
+
+      // Broad, smooth round potbelly curve (no sharp point in Side View!)
+      const bellyBulge = Math.exp(-Math.pow((ny + 0.18) / 0.62, 2));
+      const chestBroad = Math.exp(-Math.pow((ny - 0.34) / 0.36, 2));
+
+      const rx = (0.64 * this.bellyHeft * (0.93 + 0.11 * bellyBulge))
+        + (0.06 * this.shoulderHeft * chestBroad);
+      const ry = 0.55; // Spans y = 1.34 ± 0.55 -> [0.79 .. 1.89]
+
+      let zOut;
+      if (nz >= 0) {
+        const pecPad = 0.026 * Math.exp(-Math.pow((ny - 0.30) / 0.18, 2))
+          * Math.exp(-Math.pow((absX - 0.38) / 0.22, 2));
+        const sternumIndent = -0.012 * Math.exp(-Math.pow((ny - 0.30) / 0.20, 2))
+          * Math.exp(-Math.pow(nx / 0.12, 2));
+        const rzFront = 0.45 + (0.26 * this.bellyHeft * bellyBulge) + pecPad + sternumIndent;
+        zOut = nz * rzFront + (0.035 * this.bellyHeft * bellyBulge);
+      } else {
+        const lumbarTuck = 0.055 * Math.exp(-Math.pow((ny + 0.14) / 0.34, 2));
+        const spineGroove = 0.026 * Math.exp(-Math.pow(nx / 0.11, 2))
+          * smoothstep(-0.30, 0.0, ny) * smoothstep(0.75, 0.45, ny) * (-nz);
+        const rzBack = (0.51 * this.bellyHeft - lumbarTuck) * (1.0 - 0.14 * Math.max(0, ny));
+        zOut = nz * rzBack + spineGroove;
+      }
+
+      tPos.setXYZ(i, nx * rx, ny * ry, zOut);
     }
     torsoGeo.computeVertexNormals();
 
     this.bellyMesh = new THREE.Mesh(torsoGeo, torsoSkinMat);
-    this.bellyMesh.position.set(0, 0.92, 0.04);
+    this.bellyMesh.position.set(0, 1.34, 0.02);
     this.bellyMesh.castShadow = true;
     this.bellyMesh.receiveShadow = true;
     this.bodyGroup.add(this.bellyMesh);
 
-    // Smooth Deltoid Shoulder Caps bridging upper torso into upper arms
-    const shoulderCapGeo = new THREE.SphereGeometry(0.22 * this.shoulderHeft, 14, 12);
+    // Natural Bare Glute Cheeks flowing smoothly into back of thighs with clear center cleft for Tate-Mitsu!
+    const gluteGeo = new THREE.SphereGeometry(0.232 * this.bellyHeft, 22, 18);
+    gluteGeo.scale(1.02, 0.96, 0.88);
+    [-1, 1].forEach(side => {
+      const glute = new THREE.Mesh(gluteGeo, skinMat);
+      glute.position.set(side * 0.245 * this.bellyHeft, 0.72, -0.20 * this.bellyHeft);
+      glute.castShadow = true;
+      glute.receiveShadow = true;
+      this.bodyGroup.add(glute);
+    });
+
+    // ================= C. CLEAN TILTED MAWASHI, TATE-MITSU & 4-PETAL X-KNOT =================
+    const beltRx = 0.70 * this.bellyHeft;
+    const beltRz = 0.61 * this.bellyHeft;
+    const beltHeight = 0.40;
+
+    // Forward-tilted folded cloth waistband
+    const mawashiGroup = new THREE.Group();
+    mawashiGroup.position.set(0, 1.01, 0.03);
+    mawashiGroup.rotation.x = 0.115;
+
+    const bandGeo = new THREE.CylinderGeometry(1.0, 1.0, beltHeight, 60, 20, false);
+    const bandPos = bandGeo.attributes.position;
+    for (let i = 0; i < bandPos.count; i++) {
+      const bx = bandPos.getX(i);
+      const by = bandPos.getY(i);
+      const bz = bandPos.getZ(i);
+      const ny = by / (beltHeight * 0.5);
+      const radialR = Math.hypot(bx, bz);
+
+      if (radialR > 0.001) {
+        const edgeRound = 1.0 - 0.065 * Math.pow(Math.abs(ny), 3.2);
+        const midFold = 1.0 - 0.025 * Math.exp(-Math.pow(ny / 0.16, 2));
+        const taper = 0.97 + 0.03 * ((ny + 1) * 0.5);
+        const profile = edgeRound * midFold * taper;
+        bandPos.setXYZ(i, bx * beltRx * profile, by, bz * beltRz * profile);
+      } else {
+        bandPos.setXYZ(i, 0, by, 0);
+      }
+    }
+    bandGeo.computeVertexNormals();
+    const mawashiBand = new THREE.Mesh(bandGeo, mawashiMat);
+    mawashiBand.castShadow = true;
+    mawashiBand.receiveShadow = true;
+    mawashiGroup.add(mawashiBand);
+    this.bodyGroup.add(mawashiGroup);
+
+    // Tucked Rounded-Triangular Front Maetate Groin Pouch (flush under front belt between inner thighs!)
+    const pouchGeo = new THREE.SphereGeometry(1.0, 28, 22);
+    const pPos = pouchGeo.attributes.position;
+    for (let i = 0; i < pPos.count; i++) {
+      const nx = pPos.getX(i);
+      const ny = pPos.getY(i); // -1 (crotch) .. +1 (tucked inside belt)
+      const nz = pPos.getZ(i);
+      const widthTaper = 0.11 + 0.13 * smoothstep(-0.85, 0.65, ny);
+      const zCurve = 0.08 * smoothstep(-0.85, 0.45, ny);
+      pPos.setXYZ(
+        i,
+        nx * widthTaper * this.bellyHeft,
+        ny * 0.21,
+        nz * 0.21 * this.bellyHeft + zCurve
+      );
+    }
+    pouchGeo.computeVertexNormals();
+    const pouchMesh = new THREE.Mesh(pouchGeo, mawashiMat);
+    pouchMesh.position.set(0, 0.67, 0.17 * this.bellyHeft);
+    pouchMesh.castShadow = true;
+    this.bodyGroup.add(pouchMesh);
+
+    // Rear Vertical Tate-Mitsu Cloth Strap clearly visible right down the center cleft between the glutes!
+    const strapCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(0, 0.50, -0.02),
+      new THREE.Vector3(0, 0.56, -0.28 * this.bellyHeft),
+      new THREE.Vector3(0, 0.74, -0.40 * this.bellyHeft),
+      new THREE.Vector3(0, 1.00, -0.52 * this.bellyHeft)
+    ]);
+    const strapGeo = new THREE.TubeGeometry(strapCurve, 24, 0.084 * this.bellyHeft, 14, false);
+    strapGeo.scale(1.12, 1.0, 0.72);
+    const strapMesh = new THREE.Mesh(strapGeo, mawashiMat);
+    strapMesh.castShadow = true;
+    this.bodyGroup.add(strapMesh);
+
+    // Rear 4-Petal X-Shaped Flat-Folded Ribbon Knot (Exact Back & Side View reference match, no tails)
+    const knotGroup = new THREE.Group();
+    knotGroup.position.set(0, 1.09, 0.03 - beltRz - 0.012);
+    knotGroup.rotation.x = 0.10;
+
+    const createRibbonPetalGeo = () => {
+      const geo = new THREE.SphereGeometry(1.0, 24, 18);
+      const gPos = geo.attributes.position;
+      for (let i = 0; i < gPos.count; i++) {
+        const nx = gPos.getX(i);
+        const ny = gPos.getY(i);
+        const nz = gPos.getZ(i);
+
+        const u = (ny + 1) * 0.5;
+        const boxY = Math.sign(ny) * Math.pow(Math.abs(ny), 0.72);
+        const boxX = Math.sign(nx) * Math.pow(Math.abs(nx), 0.78);
+
+        const halfWidth = 0.052 + 0.052 * smoothstep(0.0, 0.85, u);
+        const halfThick = 0.044 * (0.80 + 0.25 * Math.sin(u * Math.PI));
+        const pleat = nz < 0 ? 0.010 * Math.exp(-Math.pow(nx / 0.35, 2)) * smoothstep(0.15, 0.85, u) : 0;
+
+        gPos.setXYZ(
+          i,
+          boxX * halfWidth,
+          (boxY + 1.0) * 0.145,
+          nz * halfThick + pleat - u * 0.018
+        );
+      }
+      geo.computeVertexNormals();
+      return geo;
+    };
+
+    const petalGeo = createRibbonPetalGeo();
+    [
+      { rotZ: 0.72, tiltY: -0.10 },
+      { rotZ: -0.72, tiltY: 0.10 },
+      { rotZ: 2.42, tiltY: -0.10 },
+      { rotZ: -2.42, tiltY: 0.10 }
+    ].forEach(p => {
+      const petal = new THREE.Mesh(petalGeo, mawashiMat);
+      petal.rotation.z = p.rotZ;
+      petal.rotation.y = p.tiltY;
+      petal.castShadow = true;
+      knotGroup.add(petal);
+    });
+
+    const centerWrapGeo = new THREE.SphereGeometry(1.0, 20, 16);
+    const cwPos = centerWrapGeo.attributes.position;
+    for (let i = 0; i < cwPos.count; i++) {
+      const nx = cwPos.getX(i);
+      const ny = cwPos.getY(i);
+      const nz = cwPos.getZ(i);
+      const bx = Math.sign(nx) * Math.pow(Math.abs(nx), 0.75);
+      const by = Math.sign(ny) * Math.pow(Math.abs(ny), 0.75);
+      cwPos.setXYZ(i, bx * 0.088, by * 0.135, nz * 0.068 - 0.02);
+    }
+    centerWrapGeo.computeVertexNormals();
+    const centerWrap = new THREE.Mesh(centerWrapGeo, mawashiMat);
+    centerWrap.rotation.z = 0.22;
+    centerWrap.castShadow = true;
+    knotGroup.add(centerWrap);
+
+    this.bodyGroup.add(knotGroup);
+
+    // ================= D. SEAMLESS BARE-WRISTED ARMS & SCULPTED CHIBI HANDS =================
+    const shoulderCapGeo = new THREE.SphereGeometry(0.154 * this.shoulderHeft, 18, 14);
     [-1, 1].forEach(side => {
       const sCap = new THREE.Mesh(shoulderCapGeo, skinMat);
-      sCap.position.set(side * 0.76 * this.shoulderHeft, 1.19, 0.03);
+      sCap.position.set(side * 0.49 * this.shoulderHeft, 1.65, -0.01);
       sCap.castShadow = true;
       this.bodyGroup.add(sCap);
     });
 
-    // Chubby sumo lower hip/glute cheeks peeking cleanly at back
-    const gluteGeo = new THREE.SphereGeometry(0.32 * this.bellyHeft, 16, 12);
-    gluteGeo.scale(1.05, 0.88, 0.95);
-    [-1, 1].forEach(side => {
-      const glute = new THREE.Mesh(gluteGeo, skinMat);
-      glute.position.set(side * 0.30 * this.bellyHeft, 0.54, -0.34 * this.bellyHeft);
-      glute.castShadow = true;
-      this.bodyGroup.add(glute);
-    });
-
-    // 5. Woven Silk Mawashi Belt, Swaying Front Sagari & Rear Komamusubi Knot
-    const beltRx = 0.82 * this.bellyHeft * 1.06;
-    const beltRz = 0.82 * this.bellyHeft * 1.08;
-
-    const mawashiGeo = new THREE.CylinderGeometry(0.82 * this.bellyHeft, 0.79 * this.bellyHeft, 0.40, 32);
-    mawashiGeo.scale(1.06, 1.0, 1.08);
-    const mawashiMesh = new THREE.Mesh(mawashiGeo, mawashiMat);
-    mawashiMesh.position.set(0, 0.62, 0.06);
-    mawashiMesh.castShadow = true;
-    this.bodyGroup.add(mawashiMesh);
-
-    // Plush rolled silk upper & middle belt folds
-    [0.76, 0.62, 0.48].forEach((foldY, idx) => {
-      const rFactor = idx === 2 ? 0.97 : 1.0;
-      const rollGeo = new THREE.TorusGeometry(0.81 * this.bellyHeft * rFactor, 0.036, 10, 32);
-      rollGeo.scale(1.06, 1.0, 1.08);
-      rollGeo.rotateX(Math.PI / 2);
-      const rollMesh = new THREE.Mesh(rollGeo, mawashiMat);
-      rollMesh.position.set(0, foldY, 0.06);
-      rollMesh.castShadow = true;
-      this.bodyGroup.add(rollMesh);
-    });
-
-    // Smooth sculpted curved front Maetate wrap (replaces blocky BoxGeometry)
-    const groinGeo = new THREE.SphereGeometry(0.35, 18, 14);
-    groinGeo.scale(0.76 * this.bellyHeft, 1.02, 1.18 * this.bellyHeft);
-    const groinMesh = new THREE.Mesh(groinGeo, mawashiMat);
-    groinMesh.position.set(0, 0.46, 0.14);
-    groinMesh.castShadow = true;
-    this.bodyGroup.add(groinMesh);
-
-    // 7 Swaying Front Sagari Silk Fringes across the front waist arc
-    const sagariCount = 7;
-    const sagariCordGeo = new THREE.CapsuleGeometry(0.025, 0.25, 6, 8);
-    const sagariTipGeo = new THREE.SphereGeometry(0.030, 8, 8);
-    for (let i = 0; i < sagariCount; i++) {
-      const frac = (i / (sagariCount - 1)) - 0.5; // -0.5 .. +0.5
-      const angle = frac * 1.12; // Front arc around +Z
-      const pivot = new THREE.Group();
-      pivot.position.set(
-        Math.sin(angle) * (beltRx + 0.03),
-        0.70,
-        0.06 + Math.cos(angle) * (beltRz + 0.03)
-      );
-      pivot.rotation.y = angle;
-      // Slight natural outward rest angle over belly/thighs
-      const baseTiltX = 0.08;
-      pivot.rotation.x = baseTiltX;
-
-      const cordMat = i % 2 === 0 ? mawashiMat : sagariAltMat;
-      const cord = new THREE.Mesh(sagariCordGeo, cordMat);
-      cord.position.y = -0.16;
-      cord.castShadow = true;
-      pivot.add(cord);
-
-      const tip = new THREE.Mesh(sagariTipGeo, goldMat);
-      tip.position.y = -0.30;
-      pivot.add(tip);
-
-      this.bodyGroup.add(pivot);
-      this.sagariPivots.push({ pivot, baseTiltX, phase: i * 0.65 });
-    }
-
-    // Rear 4-Loop Butterfly Knot (Komamusubi)
-    const knotGroup = new THREE.Group();
-    knotGroup.position.set(0, 0.65, 0.06 - beltRz - 0.02);
-
-    const centerKnotGeo = new THREE.CapsuleGeometry(0.11, 0.14, 8, 12);
-    centerKnotGeo.rotateZ(Math.PI / 2);
-    const centerKnot = new THREE.Mesh(centerKnotGeo, mawashiMat);
-    centerKnot.castShadow = true;
-    knotGroup.add(centerKnot);
-
-    const loopGeo = new THREE.TorusGeometry(0.155, 0.062, 10, 18);
-    [
-      { rotZ: Math.PI * 0.26, posX: -0.16, posY: 0.11 },
-      { rotZ: -Math.PI * 0.26, posX: 0.16, posY: 0.11 },
-      { rotZ: Math.PI * 0.74, posX: -0.15, posY: -0.10 },
-      { rotZ: -Math.PI * 0.74, posX: 0.15, posY: -0.10 }
-    ].forEach(l => {
-      const loopMesh = new THREE.Mesh(loopGeo, mawashiMat);
-      loopMesh.rotation.z = l.rotZ;
-      loopMesh.rotation.y = l.posX < 0 ? -0.18 : 0.18;
-      loopMesh.position.set(l.posX, l.posY, -0.02);
-      loopMesh.castShadow = true;
-      knotGroup.add(loopMesh);
-    });
-
-    // Dual angled silk knot tails
-    const tailGeo = new THREE.CapsuleGeometry(0.048, 0.20, 6, 8);
-    tailGeo.scale(1.15, 1.0, 0.45);
-    [-1, 1].forEach(side => {
-      const tailMesh = new THREE.Mesh(tailGeo, mawashiMat);
-      tailMesh.position.set(side * 0.065, -0.22, -0.02);
-      tailMesh.rotation.z = side * 0.18;
-      tailMesh.castShadow = true;
-      knotGroup.add(tailMesh);
-    });
-    this.bodyGroup.add(knotGroup);
-
-    // Prestigious Ceremonial Yokozuna Tsuna Rope & Paper Shide for Picked Champion!
-    if (this.isChampion) {
-      const tsunaMat = new THREE.MeshStandardMaterial({
-        color: 0xffffff,
-        emissive: 0xfff3d6,
-        emissiveIntensity: 0.12,
-        roughness: 0.55,
-        metalness: 0.05
-      });
-
-      // Thick braided white ceremonial rope around upper belt
-      const tsunaGeo = new THREE.TorusGeometry(0.84 * this.bellyHeft, 0.072, 12, 36);
-      tsunaGeo.scale(1.06, 1.25, 1.08);
-      tsunaGeo.rotateX(Math.PI / 2);
-      const tsunaMesh = new THREE.Mesh(tsunaGeo, tsunaMat);
-      tsunaMesh.position.set(0, 0.74, 0.06);
-      tsunaMesh.castShadow = true;
-      this.bodyGroup.add(tsunaMesh);
-
-      // Gold ceremonial bindings + 5 crisp white folded Shide paper zig-zags
-      const shideAngles = [-0.95, -0.48, 0, 0.48, 0.95];
-      shideAngles.forEach(ang => {
-        const holder = new THREE.Group();
-        holder.position.set(
-          Math.sin(ang) * (beltRx + 0.08),
-          0.72,
-          0.06 + Math.cos(ang) * (beltRz + 0.08)
-        );
-        holder.rotation.y = ang;
-
-        // Gold binding ring on rope
-        const ringGeo = new THREE.CylinderGeometry(0.082, 0.082, 0.05, 12);
-        ringGeo.rotateZ(Math.PI / 2);
-        const ring = new THREE.Mesh(ringGeo, goldMat);
-        holder.add(ring);
-
-        // Two-step zig-zag white paper Shide pendant
-        const segGeo = new THREE.BoxGeometry(0.085, 0.13, 0.018);
-        const seg1 = new THREE.Mesh(segGeo, tsunaMat);
-        seg1.position.set(-0.02, -0.10, 0.02);
-        seg1.rotation.z = 0.26;
-        seg1.castShadow = true;
-        holder.add(seg1);
-
-        const seg2 = new THREE.Mesh(segGeo, tsunaMat);
-        seg2.position.set(0.02, -0.20, 0.025);
-        seg2.rotation.z = -0.26;
-        seg2.castShadow = true;
-        holder.add(seg2);
-
-        this.bodyGroup.add(holder);
-      });
-    }
-
-    // 6. Smooth Capsule Arms, White Athletic Wrist Tape & Plump Sculpted Hands
     const createSculptedHand = (isLeft) => {
       const handGroup = new THREE.Group();
-      const thumbSign = isLeft ? 1 : -1;
+      const side = isLeft ? -1 : 1;
+      const palmInward = -side;
 
-      // Soft rounded fleshy palm cushion (replaces sharp BoxGeometry)
-      const palmGeo = new THREE.SphereGeometry(0.115, 14, 12);
-      palmGeo.scale(1.12, 0.78, 0.92);
+      const palmGeo = new THREE.SphereGeometry(0.098, 16, 14);
+      palmGeo.scale(0.68, 1.05, 0.96);
       const palmMesh = new THREE.Mesh(palmGeo, skinMat);
-      palmMesh.position.set(0, -0.055, 0.01);
+      palmMesh.position.set(0, -0.055, 0);
       palmMesh.castShadow = true;
       handGroup.add(palmMesh);
 
-      // Rosy inner palm warmth pad
-      const padGeo = new THREE.SphereGeometry(0.075, 10, 8);
-      padGeo.scale(1.0, 0.65, 0.55);
-      const padMesh = new THREE.Mesh(padGeo, rosySkinMat);
-      padMesh.position.set(0, -0.06, 0.068);
-      handGroup.add(padMesh);
-
-      // Plump Opposable Thumb
-      const thumbGeo = new THREE.CapsuleGeometry(0.038, 0.068, 6, 8);
+      const thumbGeo = new THREE.CapsuleGeometry(0.029, 0.054, 6, 10);
       const thumbMesh = new THREE.Mesh(thumbGeo, skinMat);
-      thumbMesh.position.set(0.095 * thumbSign, -0.055, 0.055);
-      thumbMesh.rotation.set(0.38, 0.15 * thumbSign, -0.48 * thumbSign);
+      thumbMesh.position.set(palmInward * 0.018, -0.058, 0.084);
+      thumbMesh.rotation.x = 0.68;
+      thumbMesh.rotation.z = -palmInward * 0.28;
       thumbMesh.castShadow = true;
       handGroup.add(thumbMesh);
 
-      // 4 Chubby Capsule Fingers splayed slightly in ready sumo palm
       const fingerDefs = [
-        { offset: 0.058 * thumbSign, len: 0.075, rad: 0.032, splay: -0.10 * thumbSign },
-        { offset: 0.019 * thumbSign, len: 0.090, rad: 0.034, splay: -0.03 * thumbSign },
-        { offset: -0.020 * thumbSign, len: 0.078, rad: 0.032, splay: 0.04 * thumbSign },
-        { offset: -0.056 * thumbSign, len: 0.058, rad: 0.029, splay: 0.12 * thumbSign }
+        { z: 0.050, len: 0.056, r: 0.024 },
+        { z: 0.017, len: 0.066, r: 0.025 },
+        { z: -0.016, len: 0.058, r: 0.024 },
+        { z: -0.047, len: 0.045, r: 0.022 }
       ];
-
       fingerDefs.forEach(f => {
-        const fGeo = new THREE.CapsuleGeometry(f.rad, f.len, 6, 8);
+        const fGeo = new THREE.CapsuleGeometry(f.r, f.len, 6, 8);
         const fMesh = new THREE.Mesh(fGeo, skinMat);
-        fMesh.position.set(f.offset, -0.13 - f.len * 0.35, 0.022);
-        fMesh.rotation.x = 0.22;
-        fMesh.rotation.z = f.splay;
+        fMesh.position.set(palmInward * 0.012, -0.135 - f.len * 0.28, f.z);
+        fMesh.rotation.z = palmInward * 0.18;
         fMesh.castShadow = true;
         handGroup.add(fMesh);
       });
@@ -615,41 +726,56 @@ export class ChibiSumo {
       const side = isLeft ? -1 : 1;
       const armGroup = new THREE.Group();
 
-      // Chubby upper arm capsule
-      const upperGeo = new THREE.CapsuleGeometry(0.195 * this.shoulderHeft, 0.22, 10, 14);
+      // Continuous CapsuleGeometry upper arm (stays full across shoulder & elbow joints without pinching!)
+      const upperGeo = new THREE.CapsuleGeometry(0.148 * this.shoulderHeft, 0.24, 10, 18);
+      const uPos = upperGeo.attributes.position;
+      for (let i = 0; i < uPos.count; i++) {
+        const x = uPos.getX(i);
+        const y = uPos.getY(i); // +0.268 .. -0.268
+        const z = uPos.getZ(i);
+        const t = THREE.MathUtils.clamp((0.20 - y) / 0.40, 0, 1); // 0 shoulder -> 1 elbow
+        const taper = 1.04 - 0.12 * t;
+        uPos.setXYZ(i, x * taper, y - 0.12, z * taper * 0.96);
+      }
+      upperGeo.computeVertexNormals();
       const upperMesh = new THREE.Mesh(upperGeo, skinMat);
-      upperMesh.position.set(0, -0.17, 0);
       upperMesh.castShadow = true;
       armGroup.add(upperMesh);
 
-      // Tapered forearm capsule angled slightly forward
+      // Continuous CapsuleGeometry forearm tapering smoothly to a bare wrist (zero bead pinch, zero wrist tape!)
       const foreGroup = new THREE.Group();
-      foreGroup.position.set(0, -0.32, 0.02);
-      foreGroup.rotation.x = -0.32; // Natural bent elbow ready to push!
+      foreGroup.position.set(0, -0.28, 0);
 
-      const foreGeo = new THREE.CapsuleGeometry(0.158, 0.18, 10, 14);
+      const foreGeo = new THREE.CapsuleGeometry(0.132, 0.22, 10, 18);
+      const fPos = foreGeo.attributes.position;
+      for (let i = 0; i < fPos.count; i++) {
+        const x = fPos.getX(i);
+        const y = fPos.getY(i);
+        const z = fPos.getZ(i);
+        const t = THREE.MathUtils.clamp((0.18 - y) / 0.36, 0, 1); // 0 elbow -> 1 wrist
+        const forearmTaper = 1.03 - 0.24 * t + 0.05 * Math.sin(t * Math.PI);
+        fPos.setXYZ(i, x * forearmTaper, y - 0.13, z * forearmTaper * 0.95);
+      }
+      foreGeo.computeVertexNormals();
       const foreMesh = new THREE.Mesh(foreGeo, skinMat);
-      foreMesh.position.set(0, -0.13, 0);
       foreMesh.castShadow = true;
       foreGroup.add(foreMesh);
 
-      // Crisp White Sumo Wrist Tape Wrap
-      const wristTapeGeo = new THREE.CylinderGeometry(0.155, 0.148, 0.095, 16);
-      const wristTape = new THREE.Mesh(wristTapeGeo, tapeMat);
-      wristTape.position.set(0, -0.23, 0);
-      wristTape.castShadow = true;
-      foreGroup.add(wristTape);
-
       const hand = createSculptedHand(isLeft);
-      hand.position.set(0, -0.28, 0.01);
-      // Angle palm slightly forward into classic sumo Tsuppari guard
-      hand.rotation.x = -0.35;
+      hand.position.set(0, -0.29, 0);
       foreGroup.add(hand);
 
       armGroup.add(foreGroup);
-      armGroup.position.set(side * 0.84 * this.shoulderHeft, 1.15, 0.05);
-      armGroup.rotation.z = -side * 0.36;
-      armGroup.rotation.x = 0.28;
+      armGroup.position.set(side * 0.53 * this.shoulderHeft, 1.66, -0.01);
+
+      if (isLeft) {
+        this.leftForeArm = foreGroup;
+        this.leftHand = hand;
+      } else {
+        this.rightForeArm = foreGroup;
+        this.rightHand = hand;
+      }
+
       return armGroup;
     };
 
@@ -657,43 +783,48 @@ export class ChibiSumo {
     this.rightArm = buildArm(false);
     this.bodyGroup.add(this.leftArm);
     this.bodyGroup.add(this.rightArm);
+    this.applyDefaultArmStance();
 
-    // 7. Chubby Sumo Legs, White Athletic Ankle Wraps & Organic Sculpted Feet
+    // ================= E. STRAIGHT STURDY BARE LEGS & FLAT-PLANTED 5-TOED FEET =================
     const createSculptedFoot = (isLeft) => {
       const footGroup = new THREE.Group();
       const innerSign = isLeft ? 1 : -1;
 
-      // Smooth organic sculpted instep & sole cushion (replaces sharp BoxGeometry)
-      const footGeo = new THREE.SphereGeometry(0.22, 16, 12);
-      footGeo.scale(0.84, 0.46, 1.16);
+      const footGeo = new THREE.SphereGeometry(1.0, 22, 16);
+      const ftPos = footGeo.attributes.position;
+      for (let i = 0; i < ftPos.count; i++) {
+        const nx = ftPos.getX(i);
+        const ny = ftPos.getY(i);
+        const nz = ftPos.getZ(i);
+        const yScaled = ny < 0 ? 0.068 + ny * 0.065 : 0.068 + ny * 0.095 * (1.0 - 0.28 * Math.max(0, nz));
+        const xWidth = 0.176 * (1.0 + 0.08 * Math.max(0, nz));
+        const zLen = nz >= 0 ? nz * 0.24 : nz * 0.18;
+        ftPos.setXYZ(i, nx * xWidth, Math.max(0.002, yScaled), zLen + 0.04);
+      }
+      footGeo.computeVertexNormals();
       const footMesh = new THREE.Mesh(footGeo, skinMat);
-      footMesh.position.set(0, 0.085, 0.05);
       footMesh.castShadow = true;
       footMesh.receiveShadow = true;
       footGroup.add(footMesh);
 
-      // Rounded heel pad
-      const heelGeo = new THREE.SphereGeometry(0.15, 12, 10);
-      heelGeo.scale(0.95, 0.58, 0.90);
-      const heelMesh = new THREE.Mesh(heelGeo, skinMat);
-      heelMesh.position.set(0, 0.075, -0.09);
-      heelMesh.castShadow = true;
-      footGroup.add(heelMesh);
-
-      // 5 Plump Rosy-Warm Toes fanned cleanly along front arc
       const toeDefs = [
-        { x: 0.115 * innerSign, r: 0.052, z: 0.265 },
-        { x: 0.056 * innerSign, r: 0.046, z: 0.282 },
-        { x: 0.000,             r: 0.043, z: 0.286 },
-        { x: -0.054 * innerSign, r: 0.039, z: 0.274 },
-        { x: -0.104 * innerSign, r: 0.034, z: 0.252 }
+        { x: 0.122 * innerSign, r: 0.044, z: 0.275 },
+        { x: 0.061 * innerSign, r: 0.039, z: 0.290 },
+        { x: 0.002 * innerSign, r: 0.037, z: 0.292 },
+        { x: -0.055 * innerSign, r: 0.035, z: 0.282 },
+        { x: -0.108 * innerSign, r: 0.032, z: 0.264 }
       ];
-
-      toeDefs.forEach((toe, idx) => {
-        const toeGeo = new THREE.SphereGeometry(toe.r, 10, 8);
-        toeGeo.scale(1.0, 0.82, 1.18);
-        const toeMesh = new THREE.Mesh(toeGeo, idx === 0 ? rosySkinMat : skinMat);
-        toeMesh.position.set(toe.x, 0.055, toe.z);
+      toeDefs.forEach(toe => {
+        const toeGeo = new THREE.SphereGeometry(toe.r, 12, 10);
+        const tp = toeGeo.attributes.position;
+        for (let i = 0; i < tp.count; i++) {
+          const ty = tp.getY(i);
+          tp.setY(i, ty < 0 ? ty * 0.35 : ty * 0.85);
+          tp.setZ(i, tp.getZ(i) * 1.18);
+        }
+        toeGeo.computeVertexNormals();
+        const toeMesh = new THREE.Mesh(toeGeo, skinMat);
+        toeMesh.position.set(toe.x, 0.036, toe.z);
         toeMesh.castShadow = true;
         footGroup.add(toeMesh);
       });
@@ -705,26 +836,29 @@ export class ChibiSumo {
       const side = isLeft ? -1 : 1;
       const legGroup = new THREE.Group();
 
-      // Sturdy chubby thigh & calf capsule
-      const thighGeo = new THREE.CapsuleGeometry(0.255 * this.shoulderHeft, 0.24, 10, 16);
-      const thighMesh = new THREE.Mesh(thighGeo, skinMat);
-      thighMesh.position.set(0, 0.30, 0);
-      thighMesh.rotation.z = -side * 0.08; // Wide rooted sumo stance
-      thighMesh.castShadow = true;
-      legGroup.add(thighMesh);
-
-      // Crisp White Athletic Sumo Ankle Tape Wrap
-      const ankleTapeGeo = new THREE.CylinderGeometry(0.215, 0.228, 0.13, 18);
-      const ankleTape = new THREE.Mesh(ankleTapeGeo, tapeMat);
-      ankleTape.position.set(0, 0.155, 0.01);
-      ankleTape.castShadow = true;
-      legGroup.add(ankleTape);
+      // Continuous CapsuleGeometry leg tapering straight from plump upper thigh down to bare ankle
+      const legGeo = new THREE.CapsuleGeometry(0.19, 0.52, 12, 22);
+      const lPos = legGeo.attributes.position;
+      for (let i = 0; i < lPos.count; i++) {
+        const x = lPos.getX(i);
+        const y = lPos.getY(i); // -0.45 .. +0.45
+        const z = lPos.getZ(i);
+        const u = THREE.MathUtils.clamp((y + 0.38) / 0.76, 0, 1); // 0 ankle -> 1 hip
+        const rScale = (0.72 + 0.62 * Math.pow(u, 0.90)) * this.shoulderHeft;
+        const calfBack = z < 0 ? 0.022 * Math.sin(u * Math.PI) : 0;
+        lPos.setXYZ(i, x * rScale, y + 0.50, z * rScale * 0.96 - calfBack);
+      }
+      legGeo.computeVertexNormals();
+      const legMesh = new THREE.Mesh(legGeo, skinMat);
+      legMesh.castShadow = true;
+      legMesh.receiveShadow = true;
+      legGroup.add(legMesh);
 
       const foot = createSculptedFoot(isLeft);
-      foot.rotation.y = side * 0.12; // Natural outward sumo foot turnout
+      foot.rotation.y = side * 0.04;
       legGroup.add(foot);
 
-      legGroup.position.set(side * 0.47 * this.bellyHeft, 0, 0.02);
+      legGroup.position.set(side * 0.33 * this.bellyHeft, 0, -0.01);
       return legGroup;
     };
 
@@ -733,19 +867,22 @@ export class ChibiSumo {
     this.bodyGroup.add(this.leftLeg);
     this.bodyGroup.add(this.rightLeg);
 
-    // 8. Swirling Anime Power Charge Halos & Ground Shock Ring (keeps face 100% clear!)
+    this.root.add(this.bodyGroup);
+  }
+
+  buildCombatFX() {
     this.auraMesh = new THREE.Group();
     const haloMat = new THREE.MeshBasicMaterial({
       color: this.mawashiColor,
       transparent: true,
       opacity: 0.0
     });
-    const halo1 = new THREE.Mesh(new THREE.TorusGeometry(this.radius * 1.18, 0.035, 8, 36), haloMat);
+    const halo1 = new THREE.Mesh(new THREE.TorusGeometry(this.radius * 1.15, 0.035, 8, 36), haloMat);
     halo1.rotation.x = Math.PI * 0.45;
-    halo1.position.y = 0.75;
-    const halo2 = new THREE.Mesh(new THREE.TorusGeometry(this.radius * 1.02, 0.028, 8, 36), haloMat);
+    halo1.position.y = 0.95;
+    const halo2 = new THREE.Mesh(new THREE.TorusGeometry(this.radius * 0.98, 0.028, 8, 36), haloMat);
     halo2.rotation.x = -Math.PI * 0.42;
-    halo2.position.y = 1.05;
+    halo2.position.y = 1.30;
     this.auraMesh.add(halo1);
     this.auraMesh.add(halo2);
     this.auraHaloMat = haloMat;
@@ -764,7 +901,6 @@ export class ChibiSumo {
     this.auraRingMesh.position.y = 0.04;
     this.bodyGroup.add(this.auraRingMesh);
 
-    // 9. Glossy Teardrop Anime Sweat Drop (for edge teetering)
     const sweatGroup = new THREE.Group();
     const sweatCone = new THREE.Mesh(
       new THREE.ConeGeometry(0.085, 0.22, 10),
@@ -778,18 +914,75 @@ export class ChibiSumo {
     sweatBulb.position.y = -0.03;
     sweatGroup.add(sweatCone);
     sweatGroup.add(sweatBulb);
-    sweatGroup.position.set(headRadius * 0.92, 2.25, 0.25);
+    sweatGroup.position.set(0.58, 2.52, 0.25);
     sweatGroup.rotation.z = -0.25;
     this.sweatDrop = sweatGroup;
     this.sweatDropMat = sweatCone.material;
     this.bodyGroup.add(this.sweatDrop);
+  }
 
-    this.root.add(this.bodyGroup);
+  // Toggle between exact orthographic reference T-pose (for turnaround inspection) and natural sumo ready stance
+  setTPose(enabled = true) {
+    this.inTPose = Boolean(enabled);
+    if (!this.leftArm || !this.rightArm) return;
+    if (this.inTPose) {
+      this.leftArm.rotation.set(0, 0, -1.48);
+      this.rightArm.rotation.set(0, 0, 1.48);
+      if (this.leftForeArm) this.leftForeArm.rotation.set(0, 0, 0);
+      if (this.rightForeArm) this.rightForeArm.rotation.set(0, 0, 0);
+      if (this.leftHand) this.leftHand.rotation.set(0, 0, 0);
+      if (this.rightHand) this.rightHand.rotation.set(0, 0, 0);
+      this.bodyGroup.rotation.set(0, 0, 0);
+      this.bodyGroup.position.set(0, 0, 0);
+    } else {
+      this.applyDefaultArmStance();
+    }
+  }
+
+  applyDefaultArmStance() {
+    if (!this.leftArm || !this.rightArm) return;
+    this.leftArm.rotation.set(-0.26, 0, -0.56);
+    this.rightArm.rotation.set(-0.26, 0, 0.56);
+    if (this.leftForeArm) this.leftForeArm.rotation.set(-0.48, 0, 0.24);
+    if (this.rightForeArm) this.rightForeArm.rotation.set(-0.48, 0, -0.24);
+    if (this.leftHand) this.leftHand.rotation.set(-0.18, 0, 0);
+    if (this.rightHand) this.rightHand.rotation.set(-0.18, 0, 0);
+  }
+
+  sync3DBrows(state) {
+    if (!this.leftBrow || !this.rightBrow) return;
+    const hy = this.headBaseY;
+    if (state === 'falling') {
+      this.leftBrow.visible = false;
+      this.rightBrow.visible = false;
+    } else if (state === 'shocked') {
+      this.leftBrow.visible = true;
+      this.rightBrow.visible = true;
+      this.leftBrow.position.y = hy + 0.195;
+      this.rightBrow.position.y = hy + 0.195;
+      this.leftBrow.rotation.z = 0.10;
+      this.rightBrow.rotation.z = -0.10;
+    } else if (state === 'charging' || state === 'slap') {
+      this.leftBrow.visible = true;
+      this.rightBrow.visible = true;
+      this.leftBrow.position.y = hy + 0.135;
+      this.rightBrow.position.y = hy + 0.135;
+      this.leftBrow.rotation.z = -0.32;
+      this.rightBrow.rotation.z = 0.32;
+    } else {
+      this.leftBrow.visible = true;
+      this.rightBrow.visible = true;
+      this.leftBrow.position.y = hy + 0.146;
+      this.rightBrow.position.y = hy + 0.146;
+      this.leftBrow.rotation.z = -0.21;
+      this.rightBrow.rotation.z = 0.21;
+    }
   }
 
   drawFace(state = 'normal') {
     if (this.currentFaceState === state) return;
     this.currentFaceState = state;
+    this.sync3DBrows(state);
     if (this.faceTextureObj && this.faceTextureObj.ctx) {
       ChibiTextureFactory.renderFaceOnCanvas(this.faceTextureObj.ctx, state, this.traitVariant);
       this.faceTextureObj.texture.needsUpdate = true;
@@ -805,11 +998,21 @@ export class ChibiSumo {
   update(dt, elapsedTime) {
     if (!this.isAlive) return;
 
+    if (this.mixer) {
+      this.mixer.update(dt);
+    }
+
     // Pulse Champion floor halo if active
     if (this.championRingMesh) {
       const pulse = 1.0 + Math.sin(elapsedTime * 4.5) * 0.06;
       this.championRingMesh.scale.set(pulse, pulse, 1);
-      this.championRingMesh.material.opacity = 0.55 + Math.sin(elapsedTime * 4.5) * 0.22;
+      this.championRingMesh.material.opacity = 0.56 + Math.sin(elapsedTime * 4.5) * 0.22;
+    }
+
+    if (this.inTPose) {
+      this.root.rotation.y = this.facingAngle;
+      this.root.position.copy(this.pos);
+      return;
     }
 
     // 1. Falling off edge animation
@@ -822,14 +1025,14 @@ export class ChibiSumo {
       if (this.contactShadowMesh) this.contactShadowMesh.visible = false;
       if (this.championRingMesh) this.championRingMesh.visible = false;
 
-      // Comedic tumbling spin
       this.root.rotation.x += 4.5 * dt;
       this.root.rotation.y += 6.0 * dt;
       this.root.rotation.z += 3.5 * dt;
 
-      // Frantic flailing arms
-      this.leftArm.rotation.x = Math.sin(elapsedTime * 25) * 1.5;
-      this.rightArm.rotation.x = -Math.sin(elapsedTime * 25) * 1.5;
+      if (this.leftArm && this.rightArm) {
+        this.leftArm.rotation.x = Math.sin(elapsedTime * 25) * 1.4;
+        this.rightArm.rotation.x = -Math.sin(elapsedTime * 25) * 1.4;
+      }
 
       if (this.pos.y < -22) {
         this.isAlive = false;
@@ -842,13 +1045,14 @@ export class ChibiSumo {
     if (this.isTeetering) {
       this.drawFace('shocked');
       this.sweatDropMat.opacity = 0.92;
-      this.sweatDrop.position.y = 2.25 + Math.sin(elapsedTime * 12) * 0.08;
+      this.sweatDrop.position.y = 2.52 + Math.sin(elapsedTime * 12) * 0.08;
 
-      // Unsteady wobble on one foot
       this.bodyGroup.rotation.z = Math.sin(elapsedTime * 14) * 0.24;
       this.bodyGroup.rotation.x = -0.22;
-      this.leftArm.rotation.x = Math.sin(elapsedTime * 18) * 1.1;
-      this.rightArm.rotation.x = Math.cos(elapsedTime * 18) * 1.1;
+      if (this.leftArm && this.rightArm) {
+        this.leftArm.rotation.x = -0.6 + Math.sin(elapsedTime * 18) * 0.9;
+        this.rightArm.rotation.x = -0.6 + Math.cos(elapsedTime * 18) * 0.9;
+      }
     } else {
       this.sweatDropMat.opacity = 0;
     }
@@ -861,7 +1065,7 @@ export class ChibiSumo {
       }
     }
 
-    // Natural Eye Blinking Cycle (~2.4 - 5.2 seconds interval)
+    // Natural Eye Blinking Cycle
     if (!this.isTeetering && !this.isCharging && this.stunTimer <= 0 && this.slapTimer <= 0) {
       this.blinkTimer -= dt;
       if (this.blinkTimer <= 0 && !this.isBlinking) {
@@ -918,7 +1122,6 @@ export class ChibiSumo {
       const rs = 0.9 + Math.sin(elapsedTime * 18) * 0.15 + this.chargeAmount * 0.25;
       this.auraRingMesh.scale.set(rs, rs, 1);
 
-      // Deep sumo tachiai squat & forward lean
       this.bodyGroup.position.y = -0.25 * this.chargeAmount;
       this.bodyGroup.position.x = (Math.random() - 0.5) * 0.07 * this.chargeAmount;
       if (!this.isTeetering) {
@@ -934,86 +1137,81 @@ export class ChibiSumo {
       this.bodyGroup.position.x = 0;
     }
 
-    // 7. Waddling vs. Lively Sumo Idle Breathing Stance
+    // 7. Waddling vs. Sumo Idle Breathing Stance
     const speedMagnitude = Math.sqrt(this.vel.x * this.vel.x + this.vel.z * this.vel.z);
     if (speedMagnitude > 0.2 && !this.isTeetering) {
       this.waddleCycle += speedMagnitude * dt * 7.5;
 
-      // Energetic sumo stomp roll & forward drive posture
-      this.bodyGroup.rotation.z = Math.sin(this.waddleCycle) * 0.14;
-      this.bodyGroup.rotation.y = Math.cos(this.waddleCycle) * 0.09;
+      this.bodyGroup.rotation.z = Math.sin(this.waddleCycle) * 0.13;
+      this.bodyGroup.rotation.y = Math.cos(this.waddleCycle) * 0.08;
       if (!this.isCharging) {
-        this.bodyGroup.rotation.x = this.isDashing ? 0.24 : 0.09;
+        this.bodyGroup.rotation.x = this.isDashing ? 0.22 : 0.08;
         this.bodyGroup.position.y = Math.abs(Math.sin(this.waddleCycle)) * 0.05;
       }
 
-      // Alternating sumo leg stomps
-      this.leftLeg.position.y = Math.max(0, Math.sin(this.waddleCycle)) * 0.19;
-      this.rightLeg.position.y = Math.max(0, -Math.sin(this.waddleCycle)) * 0.19;
+      if (this.leftLeg && this.rightLeg) {
+        this.leftLeg.position.y = Math.max(0, Math.sin(this.waddleCycle)) * 0.18;
+        this.rightLeg.position.y = Math.max(0, -Math.sin(this.waddleCycle)) * 0.18;
+      }
 
-      // Oichomage fan topknot bounce
-      this.topknot.rotation.z = -Math.sin(this.waddleCycle) * 0.26;
-      this.topknot.rotation.x = Math.cos(this.waddleCycle * 2) * 0.10;
-
-      // Swaying front Sagari belt fringes
-      this.sagariPivots.forEach(sp => {
-        sp.pivot.rotation.x = sp.baseTiltX + 0.16 + Math.abs(Math.sin(this.waddleCycle + sp.phase)) * 0.18;
-        sp.pivot.rotation.z = Math.sin(this.waddleCycle + sp.phase * 0.4) * 0.18;
-      });
+      if (this.topknot) {
+        this.topknot.rotation.z = -Math.sin(this.waddleCycle) * 0.18;
+        this.topknot.rotation.x = this.topknotBaseRotX + Math.cos(this.waddleCycle * 2) * 0.08;
+      }
 
       if (Math.sin(this.waddleCycle) > 0.95 && this.particles && Math.random() < 0.3) {
         this.particles.emitDustPuff(this.pos);
       }
     } else if (!this.isTeetering) {
-      // Lively Sumo Shikiri Idle Breathing & Knee-Flex Rhythm
-      const breath = Math.sin(elapsedTime * 3.2 + this.idlePhase);
-      this.bodyGroup.rotation.z = Math.sin(elapsedTime * 1.6 + this.idlePhase) * 0.025;
-      this.bodyGroup.rotation.y = Math.cos(elapsedTime * 1.4 + this.idlePhase) * 0.03;
+      const breath = Math.sin(elapsedTime * 3.0 + this.idlePhase);
+      this.bodyGroup.rotation.z = Math.sin(elapsedTime * 1.5 + this.idlePhase) * 0.02;
+      this.bodyGroup.rotation.y = Math.cos(elapsedTime * 1.3 + this.idlePhase) * 0.025;
       if (!this.isCharging) {
-        this.bodyGroup.rotation.x = 0.03 + breath * 0.02;
-        this.bodyGroup.position.y = (breath - 1) * 0.022;
+        this.bodyGroup.rotation.x = 0.02 + breath * 0.015;
+        this.bodyGroup.position.y = (breath - 1) * 0.018;
       }
 
-      // Subtle belly breathing expansion
       if (this.bellyMesh) {
-        const bPulse = 1.0 + breath * 0.022;
-        this.bellyMesh.scale.set(bPulse, 1.0 - breath * 0.01, bPulse);
+        const bPulse = 1.0 + breath * 0.018;
+        this.bellyMesh.scale.set(bPulse, 1.0 - breath * 0.008, bPulse);
       }
 
-      this.leftLeg.position.y = 0;
-      this.rightLeg.position.y = 0;
-      this.topknot.rotation.z = Math.sin(elapsedTime * 2.2 + this.idlePhase) * 0.04;
-      this.topknot.rotation.x = breath * 0.04;
+      if (this.leftLeg && this.rightLeg) {
+        this.leftLeg.position.y = 0;
+        this.rightLeg.position.y = 0;
+      }
 
-      // Gentle Sagari fringe idle sway
-      this.sagariPivots.forEach(sp => {
-        sp.pivot.rotation.x = sp.baseTiltX + breath * 0.035;
-        sp.pivot.rotation.z = Math.sin(elapsedTime * 2.4 + sp.phase) * 0.035;
-      });
+      if (this.topknot) {
+        this.topknot.rotation.z = Math.sin(elapsedTime * 2.0 + this.idlePhase) * 0.03;
+        this.topknot.rotation.x = this.topknotBaseRotX + breath * 0.03;
+      }
     }
 
     // 8. Harite Open-Palm Thrust Slap Animation
-    if (this.slapTimer > 0) {
-      this.slapTimer -= dt;
-      if (this.stunTimer <= 0 && !this.isTeetering && !this.isCharging) {
-        this.drawFace(this.slapTimer > 0.05 ? 'slap' : 'normal');
-      }
-      const slapPhase = Math.sin(elapsedTime * 30);
-      const lThrust = Math.max(0, slapPhase);
-      const rThrust = Math.max(0, -slapPhase);
-      this.leftArm.position.z = 0.05 + lThrust * 0.46;
-      this.rightArm.position.z = 0.05 + rThrust * 0.46;
-      if (!this.isTeetering) {
-        this.leftArm.rotation.x = 0.28 + lThrust * 0.55;
-        this.rightArm.rotation.x = 0.28 + rThrust * 0.55;
-      }
-    } else {
-      this.leftArm.position.z = 0.05;
-      this.rightArm.position.z = 0.05;
-      if (!this.isTeetering) {
-        const guardSway = Math.sin(elapsedTime * 3.2 + this.idlePhase) * 0.06;
-        this.leftArm.rotation.x = (this.isDashing ? 0.75 : 0.28) + guardSway;
-        this.rightArm.rotation.x = (this.isDashing ? 0.75 : 0.28) - guardSway;
+    if (this.leftArm && this.rightArm) {
+      if (this.slapTimer > 0) {
+        this.slapTimer -= dt;
+        if (this.stunTimer <= 0 && !this.isTeetering && !this.isCharging) {
+          this.drawFace(this.slapTimer > 0.05 ? 'slap' : 'normal');
+        }
+        const slapPhase = Math.sin(elapsedTime * 30);
+        const lThrust = Math.max(0, slapPhase);
+        const rThrust = Math.max(0, -slapPhase);
+        this.leftArm.position.z = -0.01 + lThrust * 0.34;
+        this.rightArm.position.z = -0.01 + rThrust * 0.34;
+        if (!this.isTeetering) {
+          this.leftArm.rotation.x = -0.55 - lThrust * 0.65;
+          this.rightArm.rotation.x = -0.55 - rThrust * 0.65;
+        }
+      } else {
+        this.leftArm.position.z = -0.01;
+        this.rightArm.position.z = -0.01;
+        if (!this.isTeetering) {
+          const guardSway = Math.sin(elapsedTime * 3.0 + this.idlePhase) * 0.05;
+          const baseForward = this.isDashing ? -0.82 : -0.26;
+          this.leftArm.rotation.x = baseForward + guardSway;
+          this.rightArm.rotation.x = baseForward - guardSway;
+        }
       }
     }
 
